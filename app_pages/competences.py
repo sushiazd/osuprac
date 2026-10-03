@@ -5,7 +5,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from osuprog import db, model
+from osuprog import db, model, replay
 from osuprog.rating import load as load_ratings
 from osuprog.skills import CATEGORIES, CRITERIA, LABELS
 from osuprog.ui import SKILL_ICONS, SKILL_PLAIN, criterion_text, stars
@@ -130,6 +130,56 @@ else:
     ).properties(height=320)
     st.altair_chart(chart, width="stretch")
     st.caption("Les 90 derniers jours où tu as joué. Chaque point est ta note à la fin de la journée.")
+
+st.subheader("Ta précision au clic", icon=":material/ads_click:")
+clicks = replay.summary(conn)
+if clicks is None:
+    st.caption("Pas encore assez de replays analysés : ils viennent de lazer sur ce PC (Node.js nécessaire).")
+else:
+    with st.container(horizontal=True):
+        delta = None if clicks["ur_before"] is None else f"{clicks['ur'] - clicks['ur_before']:+.0f}"
+        st.metric("Régularité (unstable rate)", f"{clicks['ur']:.0f}", delta=delta, delta_color="inverse", border=True,
+                  help="L'écart type de tes clics par rapport au rythme, ×10. Plus c'est bas, plus tu tapes régulier "
+                       f"(médiane de tes {clicks['n']} dernières parties ; la flèche compare aux {clicks['n']} d'avant). "
+                       "Il dépend aussi des maps jouées : compare-le sur plusieurs semaines.")
+        b = clicks["bias"]
+        st.metric("Tendance", ("en avance" if b < 0 else "en retard") if clicks["bias_clear"] else "centrée",
+                  f"{abs(b):.0f} ms".replace(".", ","), delta_color="off", delta_arrow="off", border=True,
+                  help="De combien tu tapes en moyenne avant (avance) ou après (retard) le bon moment. « Centrée » : "
+                       "l'écart est petit ou change d'une partie à l'autre.")
+        total = clicks["miss_aim"] + clicks["miss_timing"]
+        if total:
+            st.metric("Miss de visée", f"{clicks['miss_aim'] / total:.0%}", border=True,
+                      help="Part de tes miss où tu as cliqué au bon moment mais à côté de la note. Le reste : "
+                           "clic trop tôt, trop tard ou oublié (rythme, lecture).")
+    tips = []
+    if clicks["bias_clear"]:
+        tips.append(f"Tu tapes régulièrement **{abs(clicks['bias']):.0f} ms {'trop tôt' if clicks['bias'] < 0 else 'trop tard'}**. "
+                    "Si c'est pareil sur toutes les maps, c'est sans doute ton décalage audio : lazer peut le "
+                    "calibrer d'après tes parties (réglages audio, décalage).")
+    if total >= 10:
+        share = clicks["miss_aim"] / total
+        if share >= 0.6:
+            tips.append("La plupart de tes miss sont des **clics à côté de la note** : c'est la visée qui coûte le plus "
+                        "(sauts, précision du curseur).")
+        elif share <= 0.4:
+            tips.append("La plupart de tes miss sont des **clics au mauvais moment** : rythme ou lecture des notes, "
+                        "plus que la visée.")
+        else:
+            tips.append("Tes miss se partagent entre visée et rythme : pas de cause unique.")
+    for tip in tips:
+        st.markdown(f"- {tip}")
+    hist = pd.DataFrame(clicks["history"], columns=["ended_at", "ur", "biais"])
+    hist["jour"] = pd.to_datetime(hist["ended_at"], utc=True).dt.tz_convert(None).dt.normalize()
+    daily_ur = hist.groupby("jour", as_index=False)["ur"].median()
+    if len(daily_ur) >= 3:
+        st.altair_chart(alt.Chart(daily_ur).mark_line(point=True, interpolate="monotone").encode(
+            x=alt.X("jour:T", title=None),
+            y=alt.Y("ur:Q", title="Unstable rate (médiane du jour)", scale=alt.Scale(zero=False)),
+            tooltip=[alt.Tooltip("jour:T", title="Jour"), alt.Tooltip("ur:Q", title="UR", format=".0f")],
+        ).properties(height=220), width="stretch")
+    st.caption("Calculé en rejouant tes replays de lazer contre les notes de chaque map. Reconstitution simplifiée : "
+               "fiable en tendance, pas à la note près.")
 
 with st.expander("Comment la note est calculée ?", icon=":material/calculate:"):
     st.markdown(

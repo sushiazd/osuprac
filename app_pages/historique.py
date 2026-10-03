@@ -19,12 +19,13 @@ SOURCES = {
 conn = db.connect()
 rows = conn.execute(
     """SELECT s.ended_at, b.artist, b.title, b.version, s.mods, s.accuracy, s.n_miss, s.passed, s.source,
-              a.stars, a.primary_cat,
+              a.stars, a.primary_cat, r.ur,
               (SELECT group_concat(e.category || ' ' || printf('%+.2f', e.delta), ', ')
                FROM rating_events e WHERE e.score_id = s.score_id AND abs(e.delta) >= 0.005) AS effect
        FROM scores s
        LEFT JOIN beatmaps b ON b.beatmap_id = s.beatmap_id
        LEFT JOIN map_attrs a ON a.beatmap_id = s.beatmap_id AND a.mods_key = s.mods_key
+       LEFT JOIN replay_stats r ON r.score_id = s.score_id
        WHERE s.countable = 1
        ORDER BY s.ended_at DESC"""
 ).fetchall()
@@ -43,6 +44,7 @@ df = pd.DataFrame([
         "Étoiles": r["stars"],
         "Précision": None if r["source"] == "inferred_fail" else r["accuracy"],
         "Miss": None if r["source"] == "inferred_fail" else r["n_miss"],
+        "UR": r["ur"],
         "Réussie": bool(r["passed"]),
         "Type": LABELS.get(r["primary_cat"], "-"),
         "Effet": (r["effect"] or "").replace(".", ","),
@@ -64,6 +66,8 @@ st.dataframe(
         "Précision": st.column_config.ProgressColumn(format="%.2f %%", min_value=0, max_value=100),
         "Réussie": st.column_config.CheckboxColumn(),
         "Effet": st.column_config.TextColumn(help="Variation de tes notes due à cette partie"),
+        "UR": st.column_config.NumberColumn(format="%.0f", help="Unstable rate, d'après le replay de lazer : "
+                                            "plus c'est bas, plus tes clics sont réguliers"),
     },
 )
 st.caption("« Jamais passée » : une map classée jouée au moins 3 fois sans aucun score enregistré par osu!.")

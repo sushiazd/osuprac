@@ -22,6 +22,7 @@ const parse = (text, fallback) => {
     const b = s.BeatmapInfo;
     if (s.DeletePending || !b || !s.Ruleset || s.Ruleset.ShortName !== "osu") continue;
     const meta = b.Metadata || {};
+    const replay = [...(s.Files || [])].find((f) => f.Filename && f.Filename.toLowerCase().endsWith(".osr"));
     out.push({
       uuid: String(s.ID),
       online_id: s.OnlineID,
@@ -42,6 +43,7 @@ const parse = (text, fallback) => {
       passed: s.Rank !== -1,
       pp: s.PP,
       ended_at: s.Date.toISOString().replace(/\.\d+Z$/, "Z"),
+      replay_hash: replay && replay.File ? replay.File.Hash : null,
     });
   }
   realm.close();

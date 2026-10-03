@@ -102,6 +102,18 @@ CREATE TABLE IF NOT EXISTS pool_queries (
     fetched_at TEXT
 );
 
+-- Analyse des replays de lazer (voir replay.py) : régularité au clic et nature des miss.
+CREATE TABLE IF NOT EXISTS replay_stats (
+    score_id INTEGER PRIMARY KEY,
+    ur REAL,
+    mean_error REAL,
+    great INTEGER, ok INTEGER, meh INTEGER,
+    miss_aim INTEGER,
+    miss_timing INTEGER,
+    judged INTEGER,
+    version INTEGER
+);
+
 CREATE TABLE IF NOT EXISTS session_plan (
     day TEXT,
     pos INTEGER,

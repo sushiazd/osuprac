@@ -13,7 +13,8 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from . import db
+from . import db, replay
+from . import mods as modlib
 from .config import ROOT
 from .osufile import osu_path
 
@@ -109,4 +110,52 @@ def import_local(conn, user_id: int, store_score, log=print) -> int:
         }, "lazer_local")
     conn.commit()
     log(f"{len(scores)} parties trouvées dans lazer sur ce PC, {new} nouvelles.")
+    analysed = analyse_replays(conn, scores, log)
+    if analysed:
+        log(f"{analysed} replay{'s' if analysed > 1 else ''} analysé{'s' if analysed > 1 else ''}.")
     return new
+
+
+def stored_score_id(conn, s: dict) -> int | None:
+    """Identifiant sous lequel la partie est en base : l'identifiant local peut avoir cédé la place à la même
+    partie revenue de l'API (voir sync.store_score)."""
+    sid = local_score_id(s)
+    if conn.execute("SELECT 1 FROM scores WHERE score_id = ?", (sid,)).fetchone():
+        return sid
+    row = conn.execute(
+        """SELECT score_id FROM scores WHERE beatmap_id = ? AND source != 'inferred_fail'
+           AND abs(julianday(ended_at) - julianday(?)) * 86400 < 15 ORDER BY score_id DESC LIMIT 1""",
+        (s["beatmap_id"], s["ended_at"])).fetchone()
+    return row["score_id"] if row else None
+
+
+def analyse_replays(conn, scores: list[dict], log=print) -> int:
+    """Analyse les replays pas encore traités (ou traités par une ancienne version de l'analyse)."""
+    done = {r["score_id"] for r in conn.execute("SELECT score_id FROM replay_stats WHERE version = ?",
+                                                (replay.ANALYSIS_VERSION,))}
+    files = lazer_dir() / "files"
+    count = 0
+    for s in scores:
+        if not s.get("replay_hash") or not s.get("beatmap_hash") or not modlib.is_countable(s["mods"]):
+            continue
+        sid = stored_score_id(conn, s)
+        if sid is None or sid in done:
+            continue
+        osr = files / s["replay_hash"][:1] / s["replay_hash"][:2] / s["replay_hash"]
+        h = s["beatmap_hash"]
+        osu = files / h[:1] / h[:2] / h
+        if not osr.exists() or not osu.exists():
+            continue
+        try:
+            a = replay.analyse(replay.parse_osr(osr.read_bytes()), replay.parse_map(osu.read_bytes()),
+                               modlib.acronyms(s["mods"]))
+        except Exception as e:  # replay illisible : on n'empêche pas la synchro
+            log(f"  replay de la map {s['beatmap_id']} illisible : {e}")
+            continue
+        conn.execute("INSERT OR REPLACE INTO replay_stats VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     (sid, a.unstable_rate, a.mean_error, a.great, a.ok, a.meh, a.miss_aim, a.miss_timing,
+                      a.judged, replay.ANALYSIS_VERSION))
+        done.add(sid)
+        count += 1
+    conn.commit()
+    return count
