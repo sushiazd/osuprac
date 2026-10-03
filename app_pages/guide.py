@@ -1,7 +1,7 @@
 """Page « Guide » : tout ce que veulent dire les chiffres, en clair."""
 import streamlit as st
 
-from osuprog import db, progression
+from osuprog import db, fmt, planner, progression
 from osuprog.rating import load as load_ratings
 from osuprog.skills import CATEGORIES, CRITERIA, LABELS
 from osuprog.ui import SKILL_ICONS, SKILL_PLAIN, criterion_text, stars
@@ -9,6 +9,8 @@ from osuprog.ui import SKILL_ICONS, SKILL_PLAIN, criterion_text, stars
 conn = db.connect()
 ratings = load_ratings(conn)
 rank = db.get_meta(conn, "rank_c", 0)
+finish, meet = planner.INTENSITY[planner.DEFAULT_INTENSITY]
+max_share = fmt.share(planner.MAX_SHARE)
 
 st.title("Guide", icon=":material/help:")
 st.markdown("Tout ce que veulent dire les chiffres du tableau de bord, et comment t'en servir.")
@@ -57,18 +59,21 @@ with st.expander("Pourquoi mes notes sont plus basses que les maps que je réuss
 
 with st.expander("C'est quoi un palier ?", icon=":material/flag:"):
     st.markdown(
-        "Chaque compétence a une échelle de paliers tous les 0,25★ (2,75 · 3,00 · 3,25 · 3,50…). Un palier = "
-        "**3 maps** choisies pour cette compétence, autour de sa difficulté. Réussis l'objectif sur les 3 et "
+        f"Chaque compétence a une échelle de paliers tous les {fmt.level(progression.STEP_C)} (2,75 · 3,00 · 3,25 · "
+        f"3,50…). Un palier = **{progression.MAPS_PER_TIER} maps** choisies pour cette compétence, autour de sa "
+        f"difficulté. Réussis l'objectif sur les {progression.MAPS_PER_TIER} et "
         "le palier suivant se débloque. Tu peux les jouer dans n'importe quel ordre, autant de fois que tu veux. "
-        "Si ta note dépasse largement un palier (0,5★ au-dessus), il est validé d'office pour ne pas te "
+        f"Si ta note dépasse largement un palier ({fmt.level(progression.AUTO_SKIP_MARGIN_C)} au-dessus), il est "
+        "validé d'office pour ne pas te "
         "faire perdre de temps."
     )
 
 with st.expander("C'est quoi le niveau validé et l'examen ?", icon=":material/school:"):
     st.markdown(
         f"Ton **niveau validé** ({stars(rank / 100)} en ce moment) est le niveau que tu as prouvé **dans "
-        "toutes les compétences à la fois**. Il avance de 0,5★ à la fois : quand tes 6 compétences ont validé "
-        "le palier du niveau suivant, un **examen** de 2 maps polyvalentes se débloque "
+        f"toutes les compétences à la fois**. Il avance de {fmt.level(progression.RANK_STEP_C)} à la fois : quand "
+        "tes 6 compétences ont validé le palier du niveau suivant, un **examen** de "
+        f"{progression.EXAM_MAPS} maps polyvalentes se débloque "
         f"({criterion_text(progression.EXAM_CRITERION)} sur chaque). Réussis-le, et ton niveau monte. "
         "C'est volontairement exigeant : il empêche de monter en ne travaillant que ses points forts."
     )
@@ -84,15 +89,17 @@ with st.expander("Comment le programme du jour est construit ?", icon=":material
         "Le programme est calculé pour te faire progresser **le plus vite possible**, en s'appuyant sur ce que "
         "l'on sait de l'apprentissage :\n\n"
         "1. **La bonne difficulté.** On progresse le mieux sur des maps que l'on finit la plupart du temps mais "
-        "où l'on fait encore des erreurs. L'outil vise des maps que tu finis environ 75 % du temps, avec 50 % de "
-        "chances d'atteindre l'objectif de précision. Ces chances sont calculées sur **tes** parties et "
+        f"où l'on fait encore des erreurs. L'outil vise des maps que tu finis environ {fmt.share(finish)} du temps, "
+        f"avec {fmt.share(meet)} de chances d'atteindre l'objectif de précision. Ces chances sont calculées sur **tes** "
+        "parties et "
         "recalibrées à chaque synchronisation.\n"
         "2. **Travailler là où ça rapporte le plus.** Chaque compétence reçoit une part du programme selon son "
         "retard sur tes autres compétences, sa présence dans les maps que tu voudras jouer ensuite, et "
-        "l'incertitude de sa note. Aucune ne dépasse 40 %.\n"
+        f"l'incertitude de sa note. Aucune ne dépasse {max_share}.\n"
         "3. **De la variété.** Enchaîner dix maps de la même compétence rapporte de moins en moins : le "
         "programme alterne, et ménage les compétences que tu viens de beaucoup solliciter.\n"
-        "4. **Répéter ce qu'on a raté.** Une map ratée récemment revient (jusqu'à 8 essais), parce que rejouer "
+        f"4. **Répéter ce qu'on a raté.** Une map ratée récemment revient (jusqu'à {progression.STUCK_ATTEMPTS} "
+        "essais), parce que rejouer "
         "fixe les passages difficiles ; une map déjà réussie est écartée quelques jours.\n"
         "5. **Une séance structurée dans ton temps.** Échauffement facile, travail ciblé, défi juste au-dessus "
         "de ton niveau de réussite, puis révision d'une compétence peu travaillée. La durée suit celle de tes "
@@ -131,14 +138,17 @@ with st.expander("Synchronisation : quelles parties sont prises en compte ?", ic
         "- **Dans lazer sur ce PC :** toutes tes parties terminées depuis l'installation de lazer.\n"
         "- **Perdu pour toujours :** les fails de plus de 24 h qu'osu! n'a pas gardés, et les parties quittées "
         "en cours.\n\n"
-        "Avec la synchro automatique (toutes les heures), plus aucune partie envoyée à osu! n'est perdue."
+        "Avec la synchro automatique (toutes les heures), plus aucune partie envoyée à osu! n'est perdue. "
+        "Le **suivi en direct** (barre de gauche) synchronise en plus à la fin de chaque partie dans lazer, "
+        "tant que le tableau de bord est ouvert."
     )
 
 with st.expander("Une map est trop dure, ou mal classée ?", icon=":material/tune:"):
     st.markdown(
         "Les maps de **défi** et les **tests de niveau** peuvent être trop dures : c'est prévu, joue-les "
         "quand même, le résultat sert à calibrer. Si les autres maps du jour ne te conviennent pas, le bouton "
-        "**Changer les maps du jour** (en bas de l'onglet Aujourd'hui) en pioche d'autres. Le classement des "
+        "**Changer les maps du jour** (en bas de l'onglet Aujourd'hui) en pioche d'autres, et **Ne plus me "
+        "proposer** écarte une map pour de bon (annulable dans l'onglet Progression). Le classement des "
         "maps par compétence est automatique (d'après leurs sauts, streams, AR, OD et sliders) : il peut se "
         "tromper de temps en temps."
     )

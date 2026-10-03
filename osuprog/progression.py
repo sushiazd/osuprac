@@ -1,4 +1,4 @@
-"""Paliers par compétence, examen de passage de rang et séance du jour.
+"""Paliers par compétence et examen de passage de rang.
 
 Les niveaux sont stockés en centièmes d'étoile (425 = 4,25★) pour éviter
 les problèmes d'arrondi.
@@ -7,9 +7,8 @@ import json
 import math
 import sqlite3
 from pathlib import Path
-from datetime import datetime
 
-from . import db, model
+from . import db, fmt, model
 from .maps import BUNDLED_RANGE, PLAYABLE_STATUSES, fetch_pool
 from .mods import EASY_MODS
 from .rating import DEFAULT_OBJECTS, HP_REF, effective_stars
@@ -20,7 +19,7 @@ RANK_STEP_C = 50       # un rang tous les 0,5★
 MAPS_PER_TIER = 3
 EXAM_MAPS = 2
 MIN_WEIGHT = 0.4       # part minimale de la compétence dans une map de palier
-FINISH_FLOOR = 0.30    # on ne propose pas en palier une map que tu as très peu de chances de finir
+TIER_FINISH_FLOOR = 0.30  # on ne propose pas en palier une map que tu as très peu de chances de finir
 STUCK_ATTEMPTS = 8     # essais sans atteindre l'objectif avant de remplacer une map de palier
 UNFINISHABLE_ATTEMPTS = 3  # essais sans jamais la finir (et peu de chances d'y arriver) avant remplacement
 PRIOR_STRENGTH = 3     # poids de l'estimation du modèle face à tes essais réels (en nombre d'essais)
@@ -30,10 +29,6 @@ AUTO_SKIP_GAMES = 8      # …avec assez de parties : palier validé d'office
 
 def floor_level(stars: float) -> int:
     return int(math.floor(stars * 100 / STEP_C)) * STEP_C
-
-
-def fmt(level_c: int) -> str:
-    return f"{level_c / 100:.2f}".replace(".", ",") + "★"
 
 
 def criterion_for(category: str) -> Criterion:
@@ -51,10 +46,11 @@ def best_result(conn, beatmap_id: int, crit: Criterion) -> dict | None:
     """Meilleure tentative sur cette map (sans mod facilitant) au regard du critère."""
     n_obj = n_objects_of(conn, beatmap_id)
     rows = conn.execute(
-        "SELECT accuracy, n_miss, passed, mods, ended_at FROM scores "
+        "SELECT accuracy, n_miss, passed, mods, ended_at, source FROM scores "
         "WHERE beatmap_id = ? AND countable = 1",
         (beatmap_id,),
     ).fetchall()
+    attempts = sum(r["source"] != "inferred_fail" for r in rows)
     best = None
     for r in rows:
         acr = {m["acronym"] for m in json.loads(r["mods"])}
@@ -66,7 +62,7 @@ def best_result(conn, beatmap_id: int, crit: Criterion) -> dict | None:
             "accuracy": r["accuracy"],
             "misses": r["n_miss"],
             "passed": bool(r["passed"]),
-            "attempts": len(rows),
+            "attempts": attempts,
         }
         if best is None or (res["met"], res["score"], res["accuracy"]) > (best["met"], best["score"], best["accuracy"]):
             best = res
@@ -97,8 +93,8 @@ def candidates(conn, category: str | None, lo_c: int, hi_c: int, min_weight: flo
         w = json.loads(r["weights"])
         attrs = json.loads(r["attrs"])
         hp = attrs.get("hp", HP_REF)
-        if clear and model.finish_prob(r["stars"], hp, clear["level"], clear.get("scale", 0.55),
-                                       clear.get("hp_k", 0.0)) < FINISH_FLOOR:
+        p_finish = model.finish_prob_for(clear, r["stars"], hp)
+        if p_finish is not None and p_finish < TIER_FINISH_FLOOR:
             continue
         if category is None:
             if max(w.values()) > 0.5:
@@ -135,6 +131,7 @@ def pick(conn, api, category: str | None, lo_c: int, hi_c: int, n: int,
     """Choisit n maps de palier ; va chercher de nouvelles maps sur osu! si le réservoir est trop maigre.
 
     Les maps dont tu atteins déjà l'objectif sont écartées : elles valideraient le palier sans rien t'apprendre.
+    Celles déjà essayées STUCK_ATTEMPTS fois sans succès aussi : elles seraient retirées à la synchro suivante.
     """
     crit = criterion_for(category or "exam")
 
@@ -144,7 +141,7 @@ def pick(conn, api, category: str | None, lo_c: int, hi_c: int, n: int,
             if c["beatmap_id"] in exclude_ids or c["beatmapset_id"] in sets:
                 continue
             res = best_result(conn, c["beatmap_id"], crit)
-            if res and res["met"]:
+            if res and (res["met"] or res["attempts"] >= STUCK_ATTEMPTS):
                 continue
             chosen.append(c["beatmap_id"])
             sets.add(c["beatmapset_id"])
@@ -177,7 +174,7 @@ def ensure_tier_maps(conn, api, category: str, level_c: int, log=print) -> list[
     have = [r["beatmap_id"] for r in rows]
     if len(have) < n:
         ids, sets = used_maps(conn)
-        ids |= {m["id"] for m in db.get_meta(conn, "retired_tier_maps", [])}
+        ids |= {m["id"] for m in db.get_meta(conn, "retired_tier_maps", [])} | ignored_maps(conn)
         new = pick(conn, api, None if category == "exam" else category,
                    level_c, level_c + STEP_C, n - len(have), ids, sets, log=log)
         next_slot = max((r["slot"] for r in rows), default=-1) + 1
@@ -186,7 +183,7 @@ def ensure_tier_maps(conn, api, category: str, level_c: int, log=print) -> list[
         conn.commit()
         have += new
         if len(have) < n:
-            log(f"Pas assez de maps trouvées pour {category} {fmt(level_c)} ({len(have)}/{n}).")
+            log(f"Pas assez de maps trouvées pour {category} {fmt.level(level_c)} ({len(have)}/{n}).")
     return have
 
 
@@ -238,11 +235,8 @@ def retire_stuck_tier_maps(conn, log=print) -> int:
             finished = finishes > 0
             row = conn.execute("SELECT stars, attrs FROM map_attrs WHERE beatmap_id = ? AND mods_key = ''",
                                (r["beatmap_id"],)).fetchone()
-            p_finish = None
-            if clear and row:
-                hp = json.loads(row["attrs"]).get("hp", HP_REF)
-                p_finish = model.finish_prob(row["stars"], hp, clear["level"], clear.get("scale", 0.55),
-                                             clear.get("hp_k", 0.0))
+            p_finish = (model.finish_prob_for(clear, row["stars"], json.loads(row["attrs"]).get("hp", HP_REF))
+                        if row else None)
             reason = None
             if attempts >= STUCK_ATTEMPTS:
                 reason = f"{attempts} essais sans atteindre l'objectif"
@@ -252,7 +246,7 @@ def retire_stuck_tier_maps(conn, log=print) -> int:
                 # la map est plus dure à finir que ses étoiles ne le disent (souvent la jauge de vie).
                 reason = (f"jamais finie en {attempts} essais : plus dure à finir que ses étoiles ne l'indiquent "
                           "(jauge de vie)")
-            elif attempts == 0 and p_finish is not None and p_finish < FINISH_FLOOR:
+            elif attempts == 0 and p_finish is not None and p_finish < TIER_FINISH_FLOOR:
                 reason = "très peu de chances de la finir (jauge de vie trop dure pour ton niveau)"
             if reason:
                 conn.execute("DELETE FROM tier_maps WHERE category = ? AND level_c = ? AND slot = ?",
@@ -260,7 +254,7 @@ def retire_stuck_tier_maps(conn, log=print) -> int:
                 retired.append({"id": r["beatmap_id"], "category": cat, "level_c": level, "reason": reason,
                                 "attempts": attempts, "at": db.now_iso()})
                 removed += 1
-                log(f"Map de palier remplacée ({cat} {fmt(level)}) : {reason}.")
+                log(f"Map de palier remplacée ({cat} {fmt.level(level)}) : {reason}.")
     if removed:
         db.set_meta(conn, "retired_tier_maps", retired[-30:])
         conn.commit()
@@ -304,7 +298,7 @@ def validate_tier(conn, category: str, level_c: int, how: str, log=print) -> Non
         "INSERT OR REPLACE INTO tier_log VALUES (?, ?, ?, ?)", (category, level_c, how, db.now_iso())
     )
     conn.commit()
-    log(f"Palier validé : {category} {fmt(level_c)} ({how})")
+    log(f"Palier validé : {category} {fmt.level(level_c)} ({how})")
 
 
 def exam_state(conn) -> dict:
@@ -355,17 +349,34 @@ def update(conn, api, ratings: dict[str, dict], log=print) -> None:
         conn.commit()
 
 
-# --- Séance du jour ---------------------------------------------------------------------
+# --- Maps écartées et parties d'un jour -------------------------------------------------
 
-CALIBRATED_GAMES = 3  # en dessous, la note d'une compétence est encore trop incertaine
+def ignored_maps(conn) -> set[int]:
+    return {m["id"] for m in db.get_meta(conn, "ignored_maps", [])}
 
 
-def focus_skills(ratings: dict[str, dict]) -> tuple[str, str, str]:
-    """(plus faible, deuxième plus faible, plus forte) parmi les compétences assez mesurées."""
-    measured = [c for c in CATEGORIES if ratings[c]["games"] >= CALIBRATED_GAMES]
-    pool = measured if len(measured) >= 3 else CATEGORIES
-    order = sorted(pool, key=lambda c: ratings[c]["rating"])
-    return order[0], order[1], order[-1]
+def ignore_map(conn, beatmap_id: int) -> None:
+    """« Ne plus me proposer cette map » : retirée du programme et des paliers (remplacée à la synchro)."""
+    ignored = [m for m in db.get_meta(conn, "ignored_maps", []) if m["id"] != beatmap_id]
+    ignored.append({"id": beatmap_id, "at": db.now_iso()})
+    db.set_meta(conn, "ignored_maps", ignored)
+    retired = db.get_meta(conn, "retired_tier_maps", [])
+    for r in conn.execute("SELECT category, level_c, slot FROM tier_maps WHERE beatmap_id = ?", (beatmap_id,)).fetchall():
+        res = best_result(conn, beatmap_id, criterion_for(r["category"]))
+        if res and res["met"]:
+            continue  # une map déjà réussie compte pour son palier : on la garde
+        conn.execute("DELETE FROM tier_maps WHERE category = ? AND level_c = ? AND slot = ?",
+                     (r["category"], r["level_c"], r["slot"]))
+        retired.append({"id": beatmap_id, "category": r["category"], "level_c": r["level_c"],
+                        "reason": "écartée à ta demande", "attempts": res["attempts"] if res else 0,
+                        "at": db.now_iso()})
+    db.set_meta(conn, "retired_tier_maps", retired[-30:])
+    conn.commit()
+
+
+def unignore_map(conn, beatmap_id: int) -> None:
+    db.set_meta(conn, "ignored_maps", [m for m in db.get_meta(conn, "ignored_maps", []) if m["id"] != beatmap_id])
+    conn.commit()
 
 
 def played_on(conn, beatmap_id: int, day: str) -> list[dict]:
@@ -375,9 +386,4 @@ def played_on(conn, beatmap_id: int, day: str) -> list[dict]:
         "WHERE beatmap_id = ? AND countable = 1 AND source != 'inferred_fail' ORDER BY ended_at DESC",
         (beatmap_id,),
     ).fetchall()
-    out = []
-    for r in rows:
-        local_day = datetime.fromisoformat(r["ended_at"].replace("Z", "+00:00")).astimezone().date().isoformat()
-        if local_day == day:
-            out.append(dict(r))
-    return out
+    return [dict(r) for r in rows if db.local_day(r["ended_at"]) == day]

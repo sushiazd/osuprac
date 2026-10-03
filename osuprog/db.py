@@ -1,9 +1,14 @@
 """Base SQLite locale : scores, attributs des maps, notes et paliers."""
 import json
+import os
 import sqlite3
-from datetime import datetime, timezone
+import time
+from contextlib import contextmanager
+from datetime import date, datetime, timezone
 
-from .config import DB_PATH
+from .config import BACKUP_DIR, DATA_DIR, DB_PATH
+
+BACKUPS_KEPT = 7
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
@@ -118,14 +123,60 @@ ADDED_COLUMNS = [
 ]
 
 
-def connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, timeout=30)
+def connect(path=None) -> sqlite3.Connection:
+    conn = sqlite3.connect(path or DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
+    # WAL : le tableau de bord lit pendant que la synchro écrit, sans « database is locked ».
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(SCHEMA)
     for table, column, decl in ADDED_COLUMNS:
         if column not in {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
     return conn
+
+
+def local_day(iso: str) -> str:
+    """Jour local (AAAA-MM-JJ) d'une date ISO UTC de l'API osu!."""
+    return datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone().date().isoformat()
+
+
+def daily_backup(conn, folder=BACKUP_DIR, keep: int = BACKUPS_KEPT) -> bool:
+    """Une copie de la base par jour dans le dossier du projet (synchronisé par OneDrive, lui) ; garde les `keep`
+    dernières. Le fichier est écrit à côté puis renommé : OneDrive ne voit jamais une copie à moitié écrite."""
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / f"osu-{date.today().isoformat()}.sqlite"
+    if target.exists():
+        return False
+    tmp = target.with_suffix(".tmp")
+    out = sqlite3.connect(tmp)
+    conn.backup(out)
+    out.close()
+    os.replace(tmp, target)
+    for old in sorted(folder.glob("osu-????-??-??.sqlite"))[:-keep]:
+        old.unlink()
+    return True
+
+
+class SyncBusy(RuntimeError):
+    pass
+
+
+@contextmanager
+def sync_lock(stale_after: float = 600):
+    """Empêche deux synchronisations en même temps (bouton du tableau de bord, suivi en direct, tâche horaire)."""
+    path = DATA_DIR / "sync.lock"
+    try:
+        if path.exists() and time.time() - path.stat().st_mtime > stale_after:
+            path.unlink()  # verrou laissé par une synchro plantée
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        raise SyncBusy("Une synchronisation est déjà en cours.") from None
+    try:
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
+        yield
+    finally:
+        path.unlink(missing_ok=True)
 
 
 def now_iso() -> str:

@@ -8,6 +8,8 @@ import math
 from .rating import HP_REF, SCALE
 
 LOGIT_CLIP = 30.0
+CALIBRATED_GAMES = 3      # en dessous, la note d'une compétence est encore trop incertaine
+DEFAULT_CLEAR_SCALE = 0.55
 
 
 def sigmoid(z: float) -> float:
@@ -45,6 +47,38 @@ def finish_prob(stars: float, hp: float | None, level: float, scale: float, hp_k
     """Chances de finir une map : ton niveau de réussite, corrigé de la jauge de vie (HP) de la map."""
     h = hp if hp is not None else HP_REF
     return sigmoid((level - (stars + hp_k * (h - HP_REF))) / scale)
+
+
+def finish_prob_for(clear: dict | None, stars: float, hp: float | None) -> float | None:
+    """finish_prob avec ton niveau de réussite enregistré (None tant qu'il n'est pas mesuré)."""
+    if not clear:
+        return None
+    return finish_prob(stars, hp, clear["level"], clear.get("scale", DEFAULT_CLEAR_SCALE), clear.get("hp_k", 0.0))
+
+
+def strongest_skill(ratings: dict[str, float], games: dict[str, float]) -> str:
+    """Compétence la plus haute parmi celles assez mesurées."""
+    return max(ratings, key=lambda s: ratings[s] if games[s] >= CALIBRATED_GAMES else -9)
+
+
+SIGNIFICANT_Z = 1.5   # écart / incertitude au-delà duquel une différence entre compétences est jugée réelle
+
+
+def skill_gaps(ratings: dict[str, float], games: dict[str, float]) -> dict[str, dict]:
+    """Écart de chaque compétence avec la moyenne des autres, son incertitude, et s'il dépasse la marge d'erreur.
+
+    Avec quelques dizaines de parties, deux notes à 0,15★ d'écart sont souvent indiscernables : sans ce garde-fou,
+    on présenterait du bruit comme un point faible.
+    """
+    out = {}
+    for s in ratings:
+        others = [o for o in ratings if o != s]
+        mean_others = sum(ratings[o] for o in others) / len(others)
+        sd_others = math.sqrt(sum(skill_sd(games[o]) ** 2 for o in others)) / len(others)
+        sd = math.sqrt(skill_sd(games[s]) ** 2 + sd_others ** 2)
+        gap = ratings[s] - mean_others
+        out[s] = {"gap": gap, "sd": sd, "skill_sd": skill_sd(games[s]), "significant": abs(gap) > SIGNIFICANT_Z * sd}
+    return out
 
 
 def bump(x: float, center: float, width: float) -> float:

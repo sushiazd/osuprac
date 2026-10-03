@@ -1,10 +1,10 @@
 """Page « Aujourd'hui » : la séance du jour, dans l'ordre, avec pourquoi, objectif, chances et durée."""
-from datetime import date, timedelta
+from datetime import date
 
 import pandas as pd
 import streamlit as st
 
-from osuprog import db, planner, progression
+from osuprog import db, fmt, model, planner, progression
 from osuprog.api import MissingCredentials, OsuApi
 from osuprog.rating import load as load_ratings
 from osuprog.skills import LABELS
@@ -84,8 +84,13 @@ with st.container(horizontal=True):
     st.metric("Maps jouées aujourd'hui", f"{played}/{len(items)}", border=True,
               help="Une map d'objectif compte comme finie quand tu atteins son objectif.")
     if top:
+        gap = model.skill_gaps({s: ratings[s]["rating"] for s in ratings}, {s: ratings[s]["games"] for s in ratings})[top[0]]
+        certainty = ("Elle est nettement sous tes autres compétences." if gap["significant"] and gap["gap"] < 0 else
+                     "Son retard est dans la marge d'erreur : elle est prioritaire surtout parce qu'elle compte "
+                     "beaucoup dans les maps du niveau suivant, ou parce que sa note est encore incertaine.")
         st.metric("Priorité n°1", LABELS[top[0]], border=True,
-                  help=f"{LABELS[top[0]]}, c'est {SKILL_PLAIN[top[0]]}. Ta note : {stars(ratings[top[0]]['rating'])}.")
+                  help=f"{LABELS[top[0]]}, c'est {SKILL_PLAIN[top[0]]}. Ta note : {stars(ratings[top[0]]['rating'])}. "
+                       + certainty)
     if clear:
         st.metric("Tu réussis jusqu'à", stars(clear["level"]), border=True,
                   help=f"À {stars(clear['level'])}, tu finis la map (sans fail) une fois sur deux, sur une map à jauge de "
@@ -102,7 +107,8 @@ st.progress(played / len(items) if items else 0.0,
 def card(i, *, highlight=False):
     map_card(conn, i["beatmap_id"], role=i["role"], cat=i["category"], level_c=i["level_c"],
              number=items.index(i) + 1, day=day, highlight=highlight,
-             reason=i["reason"], p=i["p"], minutes=i["minutes"])
+             reason=i["reason"], p=i["p"], minutes=i["minutes"],
+             ignorable=i["role"] != "Examen" and i["state"] == "todo")
 
 
 todo = [i for i in items if i["state"] == "todo"]
@@ -124,8 +130,8 @@ elif current is None:
 else:
     st.subheader("À jouer maintenant", icon=":material/play_arrow:")
     card(current, highlight=True)
-    st.caption("Dans lazer, tu peux aussi chercher la map par son titre dans le navigateur de maps "
-               "(bouton « Parcourir » du menu principal) et la télécharger sans quitter le jeu.")
+    st.caption("« Ouvrir dans osu! » affiche la map dans lazer, qui la télécharge si besoin. Avec le **suivi en "
+               "direct** (barre de gauche), elle se coche toute seule à la fin de ta partie.")
 
 rest = [i for i in todo + retry if i is not current]
 if rest:
@@ -146,7 +152,7 @@ if shares:
             "**le retard** de la compétence sur tes autres (plus elle est basse, plus elle compte), "
             "**sa présence** dans les maps que tu voudras jouer ensuite, et **l'incertitude** de sa note "
             "(une compétence mal mesurée est plus travaillée pour être située). "
-            "Aucune ne dépasse 40 % : varier les compétences fait mieux retenir."
+            f"Aucune ne dépasse {fmt.share(planner.MAX_SHARE)} : varier les compétences fait mieux retenir."
         )
         table = pd.DataFrame([
             {
@@ -167,9 +173,11 @@ if shares:
                     format="percent", min_value=0, max_value=1),
             },
         )
+        default_finish, default_meet = planner.INTENSITY[planner.DEFAULT_INTENSITY]
         st.markdown(
             f"**Difficulté des maps :** visée = des maps que tu finis environ "
-            f"**{summary.get('target_finish', 0.72):.0%}** du temps, avec **{summary.get('target_meet', 0.45):.0%}** "
+            f"**{summary.get('target_finish', default_finish):.0%}** du temps, avec "
+            f"**{summary.get('target_meet', default_meet):.0%}** "
             "de chances d'atteindre l'objectif de précision. Assez de réussites pour progresser, assez d'erreurs "
             "pour apprendre. Tu peux changer ça avec « Régler ma séance » (intensité).\n\n"
             "**Ordre de la séance :** échauffement facile → travail ciblé (du plus accessible au plus dur) → "
@@ -177,28 +185,19 @@ if shares:
         )
 
 # --- Efficacité : le programme tient-il ses promesses ? ---------------------------------------
-past = conn.execute("SELECT day, beatmap_id, category, role, p FROM session_plan WHERE day < ? AND day >= ? AND p IS NOT NULL",
-                    (day, (date.today() - timedelta(days=14)).isoformat())).fetchall()
-done = pred = 0.0
-n_played = 0
-for r in past:
-    plays = progression.played_on(conn, r["beatmap_id"], r["day"])
-    if not plays or r["role"] in ("Échauffement", "Test de niveau"):
-        continue
-    crit = progression.criterion_for(r["category"])
-    n_obj = progression.n_objects_of(conn, r["beatmap_id"])
-    n_played += 1
-    pred += r["p"]
-    done += any(progression.meets(bool(x["passed"]), x["accuracy"], x["n_miss"], n_obj, crit) for x in plays)
-if past:
+check = planner.forecast_check(conn, day)
+if check["any_rows"]:
     with st.expander("Le programme fonctionne-t-il ? Ses prévisions des 14 derniers jours", icon=":material/fact_check:"):
+        n_played, done, pred = check["n"], check["met"], check["predicted"]
         if n_played >= 5:
             st.markdown(
-                f"Sur **{n_played}** maps proposées que tu as jouées, tu as atteint l'objectif **{int(done)}** fois ; "
-                f"l'outil en prévoyait environ **{pred:.0f}**. "
+                f"Sur **{n_played}** maps proposées que tu as jouées, tu as atteint l'objectif **dès le premier essai "
+                f"{done}** fois ; l'outil en prévoyait environ **{pred:.0f}**. "
                 + ("Les prévisions sont justes : la difficulté est bien calibrée." if abs(done - pred) <= max(2, 0.25 * pred)
                    else "L'écart est notable : l'outil se recale automatiquement à chaque synchronisation.")
             )
+            st.caption("Seul le premier essai du jour compte : les chances affichées sont celles d'un essai, et "
+                       "compter les réussites après plusieurs essais ferait paraître l'outil plus juste qu'il ne l'est.")
         else:
             st.caption("Pas encore assez de maps jouées sur les jours précédents pour juger les prévisions.")
 

@@ -1,16 +1,19 @@
 """Tableau de bord osu! progression : streamlit run app.py (ou double-clic sur lancer.bat)."""
 import subprocess
+from datetime import date
 
 import streamlit as st
 
-from osuprog import db
+from osuprog import db, live, rewards
 from osuprog.api import AuthError, MissingCredentials
 from osuprog.config import OSU_USERNAME
 from osuprog.rating import load as load_ratings
-from osuprog.sync import sync
+from osuprog.sync import WrongPlayer, sync
 from osuprog.ui import since
 
 st.set_page_config(page_title="osu! progression", page_icon=":material/sports_esports:", layout="wide")
+
+NEWS_ICONS = {"tier": ":material/flag:", "rank": ":material/school:", "achievement": ":material/emoji_events:"}
 
 
 @st.cache_data(ttl=300)
@@ -22,16 +25,25 @@ def auto_sync_enabled() -> bool:
     return result.returncode == 0
 
 
-def run_sync(username: str) -> None:
+def run_sync(username: str | None) -> None:
     with st.status("Synchronisation…", expanded=True) as status:
         try:
             result = sync(username, log=status.write)
+        except db.SyncBusy:
+            status.update(label="Synchronisation déjà en cours", state="running", expanded=False)
+            st.info("Une synchronisation tourne déjà (synchro automatique ou suivi en direct) : "
+                    "réessaie dans quelques secondes.")
+            return
         except MissingCredentials as e:
             status.update(label="Clé API manquante", state="error")
             st.error(str(e))
             return
         except AuthError as e:
             status.update(label="Clé API refusée", state="error")
+            st.error(str(e))
+            return
+        except WrongPlayer as e:
+            status.update(label="Autre joueur", state="error")
             st.error(str(e))
             return
         except ValueError as e:
@@ -48,9 +60,22 @@ def run_sync(username: str) -> None:
     st.rerun()
 
 
+def quiet_sync() -> bool:
+    """Synchro du suivi en direct : sans journal à l'écran ; une erreur est simplement retentée plus tard."""
+    try:
+        sync(log=lambda *_: None)
+    except Exception:
+        return False
+    st.rerun(scope="app")
+
+
 conn = db.connect()
 user = db.get_meta(conn, "user")
 has_data = bool(load_ratings(conn))
+
+for event in rewards.unseen_news(conn):
+    st.toast(f"**{event['title']}** · {event['text']}", icon=NEWS_ICONS.get(event["kind"]), duration="long")
+rewards.mark_news_seen(conn)
 
 with st.sidebar:
     if user:
@@ -61,12 +86,41 @@ with st.sidebar:
                 st.markdown(f"**{user['username']}**")
                 rank = f"#{user['global_rank']:,}".replace(",", " ") if user.get("global_rank") else "non classé"
                 st.caption(f"{user['pp'] or 0:.0f} pp · {rank}")
-    username = st.text_input("Pseudo osu!", value=(user or {}).get("username") or OSU_USERNAME)
+        username = None  # la base suit ce joueur : on le retrouve par son identifiant
+    else:
+        username = st.text_input("Pseudo osu!", value=OSU_USERNAME)
     if st.button("Synchroniser", type="primary", icon=":material/sync:", width="stretch"):
         run_sync(username)
     last = db.get_meta(conn, "last_sync")
     if last:
         st.caption(f"Dernière synchro : {since(last)}")
+
+    if has_data:
+        streak = rewards.streaks(rewards.play_days(conn), date.today().isoformat())
+        if streak["current"]:
+            hint = "" if streak["played_today"] else " · joue aujourd'hui pour la garder"
+            st.markdown(f":orange[:material/local_fire_department:] **{streak['current']} jour"
+                        f"{'s' if streak['current'] > 1 else ''} d'affilée**{hint}")
+
+    if live.realm_mtime() is not None:
+        live_on = st.toggle("Suivi en direct", value=db.get_meta(conn, "live_enabled", True),
+                            help="Synchronise tout seul à la fin de chaque partie dans lazer (tant que cette page "
+                                 "est ouverte) : la map se coche et la suivante s'affiche.")
+        if live_on != db.get_meta(conn, "live_enabled", True):
+            db.set_meta(conn, "live_enabled", live_on)
+            conn.commit()
+
+        if live_on and has_data:
+            @st.fragment(run_every="10s")
+            def live_watch() -> None:
+                c = db.connect()
+                if live.pending(c):
+                    with st.spinner("Nouvelle partie détectée, mise à jour…"):
+                        live.check(c, quiet_sync)
+                c.close()
+
+            live_watch()
+
     if auto_sync_enabled():
         st.caption(":material/schedule: Synchro automatique : toutes les heures")
     else:
@@ -78,6 +132,7 @@ if has_data:
         st.Page("app_pages/aujourdhui.py", title="Aujourd'hui", icon=":material/today:", default=True),
         st.Page("app_pages/competences.py", title="Mes compétences", icon=":material/insights:"),
         st.Page("app_pages/paliers.py", title="Progression", icon=":material/stairs:"),
+        st.Page("app_pages/succes.py", title="Succès", icon=":material/emoji_events:"),
         st.Page("app_pages/historique.py", title="Historique", icon=":material/history:"),
         st.Page("app_pages/guide.py", title="Guide", icon=":material/help:"),
     ]

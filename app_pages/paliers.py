@@ -1,7 +1,7 @@
 """Page « Progression » : niveau validé, paliers par compétence et examen."""
 import streamlit as st
 
-from osuprog import db, progression
+from osuprog import db, fmt, progression
 from osuprog.progression import STEP_C
 from osuprog.rating import load as load_ratings
 from osuprog.skills import CATEGORIES, CRITERIA, LABELS
@@ -16,8 +16,9 @@ ready = [c for c in CATEGORIES if progress.get(c, 0) >= target]
 
 st.title("Ta progression", icon=":material/stairs:")
 st.markdown(
-    "Chaque compétence a une **échelle de paliers**, un tous les 0,25★. Pour valider un palier, réussis "
-    "ses **3 maps** en atteignant l'objectif de la compétence. Ton **niveau validé** avance de 0,5★ "
+    f"Chaque compétence a une **échelle de paliers**, un tous les {fmt.level(STEP_C)}. Pour valider un palier, "
+    f"réussis ses **{progression.MAPS_PER_TIER} maps** en atteignant l'objectif de la compétence. Ton **niveau "
+    f"validé** avance de {fmt.level(progression.RANK_STEP_C)} "
     "quand **toutes** tes compétences ont atteint le niveau suivant et que tu as réussi l'examen."
 )
 
@@ -73,7 +74,8 @@ for tab, cat in zip(tabs, CATEGORIES):
                            (cat,)).fetchall()
         if log:
             st.caption("Paliers validés : " + " · ".join(f"{stars(r['level_c'] / 100)} ({r['how']})" for r in log))
-        st.caption(f"Si ta note {LABELS[cat]} dépasse le palier en cours de 0,5★ (avec au moins "
+        st.caption(f"Si ta note {LABELS[cat]} dépasse le palier en cours de {fmt.level(progression.AUTO_SKIP_MARGIN_C)} "
+                   "(avec au moins "
                    f"{progression.AUTO_SKIP_GAMES} parties), le palier est validé d'office.")
 
 retired = db.get_meta(conn, "retired_tier_maps", [])
@@ -86,3 +88,24 @@ if retired:
             info = map_info(conn, m["id"])
             st.markdown(f"- **{info['title']}** [{info['version']}] ({skill_label(m['category'])} "
                         f"{stars(m['level_c'] / 100)}) : {m['reason']}.")
+
+
+def _unignore(beatmap_id: int) -> None:
+    c = db.connect()
+    progression.unignore_map(c, beatmap_id)
+    db.del_meta(c, "session_key")
+    c.commit()
+    c.close()
+
+
+ignored = db.get_meta(conn, "ignored_maps", [])
+if ignored:
+    with st.expander(f"Maps écartées à ta demande ({len(ignored)})", icon=":material/block:"):
+        st.caption("Elles ne reviennent ni dans le programme du jour ni dans les paliers. Une map de palier écartée "
+                   "est remplacée à la synchronisation suivante.")
+        for m in reversed(ignored):
+            info = map_info(conn, m["id"])
+            with st.container(horizontal=True, vertical_alignment="center"):
+                st.markdown(f"**{info['title']}** [{info['version']}] · {stars(info['stars'])}")
+                st.button("Remettre", key=f"unignore-{m['id']}", icon=":material/undo:", type="tertiary",
+                          on_click=_unignore, args=(m["id"],))

@@ -1,5 +1,8 @@
-rosu-pp-py>=4.0
-streamlit>=1.40
-python-dotenv
-requests
-pandas
+# Versions vérifiées ensemble. rosu-pp-py est figé : une autre version change le calcul des étoiles
+# (l'outil le détecte et recalcule tout, mais mieux vaut le décider).
+rosu-pp-py==4.0.2
+streamlit~=1.64
+pandas~=3.0
+altair~=6.3
+python-dotenv~=1.2
+requests~=2.34

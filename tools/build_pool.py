@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from osuprog.api import OsuApi  # noqa: E402
-from osuprog.maps import BUNDLED_POOL, pool_query, search_page  # noqa: E402
+from osuprog.maps import BUNDLED_POOL, pool_query, rosu_version, search_page  # noqa: E402
 from osuprog.osufile import download_many  # noqa: E402
 from osuprog.skills import map_attributes  # noqa: E402
 
@@ -62,7 +62,7 @@ def main() -> None:
             "attrs": attrs,
         })
     with gzip.open(BUNDLED_POOL, "wt", encoding="utf-8") as f:
-        json.dump({"version": date.today().isoformat(), "maps": out}, f, ensure_ascii=False, separators=(",", ":"))
+        json.dump({"version": date.today().isoformat(), "rosu": rosu_version(), "maps": out}, f, ensure_ascii=False, separators=(",", ":"))
     print(f"\n{len(out)} maps écrites dans {BUNDLED_POOL} ({BUNDLED_POOL.stat().st_size // 1024} Ko)")
 
 

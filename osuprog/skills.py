@@ -17,14 +17,6 @@ LABELS = {
     "reading": "Reading",
     "tech": "Tech",
 }
-DESCRIPTIONS = {
-    "aim": "Jumps, grands écarts, angles",
-    "speed": "Bursts et streams courts",
-    "stamina": "Longs streams, maps longues",
-    "accuracy": "OD élevé, régularité",
-    "reading": "AR bas ou très haut, HD",
-    "tech": "Sliders difficiles, rythmes",
-}
 
 
 # À incrémenter quand les critères de réussite changent : les paliers sont alors recalculés.

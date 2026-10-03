@@ -5,14 +5,17 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from osuprog import db, progression
+from osuprog import db, model
 from osuprog.rating import load as load_ratings
 from osuprog.skills import CATEGORIES, CRITERIA, LABELS
 from osuprog.ui import SKILL_ICONS, SKILL_PLAIN, criterion_text, stars
 
 conn = db.connect()
 ratings = load_ratings(conn)
-weakest, second, strongest = progression.focus_skills(ratings)
+values = {c: ratings[c]["rating"] for c in CATEGORIES}
+games = {c: ratings[c]["games"] for c in CATEGORIES}
+strongest = model.strongest_skill(values, games)
+gaps = model.skill_gaps(values, games)
 plan_shares = (db.get_meta(conn, "plan_summary") or {}).get("shares") or {}
 priority = [s for s in sorted(plan_shares, key=plan_shares.get, reverse=True)][:2]
 
@@ -58,19 +61,35 @@ else:
         icon=":material/lightbulb:",
     )
 
+clear_low = [c for c in CATEGORIES if gaps[c]["significant"] and gaps[c]["gap"] < 0]
+clear_high = [c for c in CATEGORIES if gaps[c]["significant"] and gaps[c]["gap"] > 0]
+signal = []
+if clear_low:
+    signal.append("nettement **en dessous** de tes autres compétences : " + ", ".join(f"**{LABELS[c]}**" for c in clear_low))
+if clear_high:
+    signal.append("nettement **au-dessus** : " + ", ".join(f"**{LABELS[c]}**" for c in clear_high))
+if signal:
+    st.markdown("**Ce qui ressort vraiment** (écart plus grand que la marge d'erreur) : " + " ; ".join(signal)
+                + ". Les autres écarts sont dans la marge d'erreur : le programme les travaille quand même, "
+                  "mais rien ne prouve encore qu'ils sont réels.")
+else:
+    st.markdown("**Tes compétences sont proches les unes des autres** : aucun écart ne dépasse la marge d'erreur "
+                "des notes. Les priorités du programme sont donc des paris raisonnables, pas des certitudes ; "
+                "elles se préciseront avec tes prochaines parties.")
+
 for row in (CATEGORIES[:3], CATEGORIES[3:]):
     for col, cat in zip(st.columns(3), row):
         r = ratings[cat]
         with col.container(border=True, height="stretch"):
             with st.container(horizontal=True, vertical_alignment="center"):
                 st.markdown(f"#### {SKILL_ICONS[cat]} {LABELS[cat]}")
-                if r["games"] < progression.CALIBRATED_GAMES:
+                if r["games"] < model.CALIBRATED_GAMES:
                     st.badge("À mesurer", icon=":material/straighten:", color="gray")
                 elif priority and cat == priority[0]:
                     st.badge("Priorité n°1", icon=":material/flag:", color="red")
                 elif len(priority) > 1 and cat == priority[1]:
                     st.badge("Priorité n°2", color="orange")
-                elif cat == strongest:
+                elif cat == strongest and gaps[cat]["significant"]:
                     st.badge("Point fort", icon=":material/emoji_events:", color="green")
             change = weekly_change(cat)
             trend = history.loc[history["category"] == cat, "note"].tail(30).round(2).tolist()
@@ -81,10 +100,15 @@ for row in (CATEGORIES[:3], CATEGORIES[3:]):
             else:
                 st.metric("Note", stars(r["rating"]), label_visibility="collapsed", **spark,
                           delta="stable sur 7 jours", delta_color="off", delta_arrow="off")
+            g = gaps[cat]
+            margin = f"±{g['skill_sd']:.2f}★".replace(".", ",")
+            versus = f"{g['gap']:+.2f}★".replace(".", ",")
+            st.caption(f"**Marge d'erreur :** {margin} · **par rapport à tes autres compétences :** {versus} "
+                       + ("(écart réel)" if g["significant"] else "(dans la marge d'erreur)"))
             st.caption(f"**C'est quoi ?** {SKILL_PLAIN[cat].capitalize()}.")
             st.caption(f"**Ta note veut dire :** sur une map {LABELS[cat]} de {stars(r['rating'])}, tu fais "
                        f"{criterion_text(CRITERIA[cat])} environ une fois sur deux.")
-            if r["games"] < progression.CALIBRATED_GAMES:
+            if r["games"] < model.CALIBRATED_GAMES:
                 st.caption(":material/straighten: Encore trop peu de parties pour être sûr : "
                            "les **tests de niveau** du programme du jour vont affiner cette note.")
             else:

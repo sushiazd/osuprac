@@ -24,18 +24,18 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from . import db, model, progression
+from . import db, fmt, model, progression
+from .model import CALIBRATED_GAMES, DEFAULT_CLEAR_SCALE
 from .rating import HP_REF, effective_stars
 from .skills import CATEGORIES, CRITERIA, LABELS
 
-PLAN_FORMAT = 14               # à incrémenter quand l'algorithme change
+PLAN_FORMAT = 15               # à incrémenter quand l'algorithme change
 # intensité -> (chances de FINIR la map visées, chances d'atteindre l'OBJECTIF de précision visées)
 # « équilibré » est le réglage le plus robuste en simulation (meilleure moyenne et meilleur pire cas
 # sous quatre hypothèses d'apprentissage, voir tools/simulate_training.py).
 INTENSITY = {"confort": (0.85, 0.60), "équilibré": (0.76, 0.50), "intense": (0.58, 0.33)}
 DEFAULT_INTENSITY = "équilibré"
 DEFAULT_MINUTES = 45
-CALIBRATED_GAMES = 3          # en dessous, la note d'une compétence est trop incertaine
 TARGET_BAND = (-0.25, 0.75)   # maps que tu voudras jouer ensuite, par rapport à ton niveau de réussite
 FINISH_WIDTH = 0.18
 MEET_WIDTH = 0.40              # vérifié en simulation : assouplir ce critère remonte les étoiles sans coût
@@ -44,7 +44,7 @@ MAX_SHARE = 0.40              # aucune compétence ne dépasse 40 % du programme
 TIER_BONUS = 1.3              # une map de palier fait aussi avancer le déblocage
 MAX_TESTS = 2
 MAX_PER_CREATOR = 2
-FINISH_FLOOR = 0.25           # on ne propose pas de map que tu as très peu de chances de finir
+PLAN_FINISH_FLOOR = 0.25      # on ne propose pas de map que tu as très peu de chances de finir
 
 
 # --- Structures ----------------------------------------------------------------------------
@@ -81,7 +81,7 @@ class Context:
     seed: str = ""
     calib: tuple = (0.0, 1.0)
     clear_level: float | None = None
-    clear_scale: float = 0.55
+    clear_scale: float = DEFAULT_CLEAR_SCALE
     hp_k: float = 0.0            # étoiles de difficulté par point de HP pour finir une map
     load2d: dict = field(default_factory=dict)   # sollicitation de chaque compétence ces 48 h
     load7d: dict = field(default_factory=dict)   # … et ces 7 jours
@@ -112,10 +112,6 @@ def noise(seed: str, key) -> float:
     """Bruit déterministe dans [-1, 1] : même jour = même séance, jours différents = variété."""
     h = hashlib.blake2b(f"{seed}:{key}".encode(), digest_size=4).digest()
     return int.from_bytes(h, "big") / 2 ** 32 * 2 - 1
-
-
-def stars_txt(value: float) -> str:
-    return f"{value:.2f}★".replace(".", ",")
 
 
 def freshness(h: History) -> float:
@@ -195,8 +191,8 @@ def explain(role: str, skill: str, ctx: Context, shares: dict, parts: dict, h: H
     part = parts[skill]
     bits = [f"{label} est ta priorité n°{rank} ({part['share']:.0%} du programme)"]
     if part["gap"] > 0.25:
-        bits.append(f"ta note ({stars_txt(ctx.ratings[skill])}) est sous la moyenne de tes compétences "
-                    f"({stars_txt(part['mean_rating'])})")
+        bits.append(f"ta note ({fmt.stars(ctx.ratings[skill])}) est sous la moyenne de tes compétences "
+                    f"({fmt.stars(part['mean_rating'])})")
     elif part["sd"] > 0.22:
         bits.append("sa note est encore incertaine")
     else:
@@ -217,7 +213,7 @@ def plan(ctx: Context, cands: list[Cand]) -> tuple[list[Item], dict]:
 
     cands = [c for c in cands if c.beatmap_id not in ctx.exclude
              and ctx.level - 1.6 <= c.stars <= ctx.level + 1.3 and c.length_s > 0
-             and (p_finish_of(c) is None or p_finish_of(c) >= FINISH_FLOOR)]
+             and (p_finish_of(c) is None or p_finish_of(c) >= PLAN_FINISH_FLOOR)]
     shares, parts = skill_shares(ctx, cands)
     summary = {"shares": shares, "parts": parts, "level": ctx.level, "budget": ctx.budget_min,
                "target_finish": ctx.target_finish, "target_meet": ctx.target_meet}
@@ -354,7 +350,7 @@ def plan(ctx: Context, cands: list[Cand]) -> tuple[list[Item], dict]:
 
     # 5. Échauffement : facile, court, dans ta compétence la plus solide (placé en tête de séance).
     #    Une seule fois par jour : si tu as déjà joué, tu es chaud, la suite reste du travail.
-    strongest = max(CATEGORIES, key=lambda s: ctx.ratings[s] if ctx.games[s] >= CALIBRATED_GAMES else -9)
+    strongest = model.strongest_skill(ctx.ratings, ctx.games)
     pool = [c for c in cands if usable(c) and c.length_s <= 150 and c.stars >= ctx.level - 1.3
             and c.weights.get(strongest, 0) >= 0.3]
     if pool and B >= 25 and not ctx.warmed_up:
@@ -392,10 +388,6 @@ def load_candidates(conn) -> list[Cand]:
     return out
 
 
-def _local_day(iso: str) -> str:
-    return datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone().date().isoformat()
-
-
 def load_history(conn, cands: list[Cand], day: str) -> dict[int, History]:
     by_id = {c.beatmap_id: c for c in cands}
     today = datetime.fromisoformat(day).date()
@@ -409,7 +401,7 @@ def load_history(conn, cands: list[Cand], day: str) -> dict[int, History]:
             continue
         top = max(c.weights, key=c.weights.get)
         best = progression.best_result(conn, c.beatmap_id, CRITERIA[top])
-        days = (today - datetime.fromisoformat(_local_day(r["last"])).date()).days
+        days = (today - datetime.fromisoformat(db.local_day(r["last"])).date()).days
         out[c.beatmap_id] = History(r["n"], bool(best and best["met"]), float(days), best["accuracy"] if best else None)
     return out
 
@@ -425,7 +417,7 @@ def load_loads(conn, day: str) -> tuple[dict, dict]:
            JOIN map_attrs a ON a.beatmap_id = s.beatmap_id AND a.mods_key = s.mods_key
            WHERE s.countable = 1 AND s.source != 'inferred_fail' AND s.ended_at >= ?""", (since,)
     ):
-        age = (now - datetime.fromisoformat(_local_day(r["ended_at"]))).days
+        age = (now - datetime.fromisoformat(db.local_day(r["ended_at"]))).days
         for s, w in json.loads(r["weights"]).items():
             l7[s] += w
             if age <= 2:
@@ -486,7 +478,7 @@ def build_context(conn, ratings: dict, day: str, exclude: set, cands: list[Cand]
         budget_min=float(cfg["minutes"]),
         target_finish=INTENSITY[cfg["intensity"]][0], target_meet=INTENSITY[cfg["intensity"]][1],
         seed=f"{day}-{variant}", calib=model.load_calibration(conn),
-        clear_level=clear["level"] if clear else None, clear_scale=(clear or {}).get("scale", 0.55),
+        clear_level=clear["level"] if clear else None, clear_scale=(clear or {}).get("scale", DEFAULT_CLEAR_SCALE),
         hp_k=(clear or {}).get("hp_k", 0.0),
         load2d=l2, load7d=l7, history=load_history(conn, cands, day),
         tier_open=tier_open, exam=exam, exam_level_c=state["target_c"], exclude=set(exclude),
@@ -497,7 +489,7 @@ def _plays_today(conn, day: str) -> int:
     return sum(1 for r in conn.execute("SELECT ended_at FROM scores WHERE source != 'inferred_fail' "
                                        "AND ended_at >= ?", ((datetime.fromisoformat(day) - timedelta(days=1))
                                                               .strftime("%Y-%m-%dT00:00:00Z"),))
-               if _local_day(r["ended_at"]) == day)
+               if db.local_day(r["ended_at"]) == day)
 
 
 def _minutes_played_today(conn, day: str) -> float:
@@ -505,7 +497,7 @@ def _minutes_played_today(conn, day: str) -> float:
     times = sorted(datetime.fromisoformat(r["ended_at"].replace("Z", "+00:00")) for r in conn.execute(
         "SELECT ended_at FROM scores WHERE source != 'inferred_fail' AND ended_at >= ?",
         ((datetime.fromisoformat(day) - timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z"),))
-        if _local_day(r["ended_at"]) == day)
+        if db.local_day(r["ended_at"]) == day)
     total, start = 0.0, None
     for prev, t in zip([None] + times, times):
         if prev is None or (t - prev) > timedelta(minutes=25):
@@ -547,7 +539,8 @@ def build_session(conn, api, ratings: dict, day: str, log=print) -> None:
     cands = load_candidates(conn)
     kept = [r for r in existing if _played_today(conn, r["beatmap_id"], day)]
     played_minutes = sum((r["minutes"] or 0) for r in kept)
-    ctx = build_context(conn, ratings, day, exclude={r["beatmap_id"] for r in kept}, cands=cands)
+    exclude = {r["beatmap_id"] for r in kept} | progression.ignored_maps(conn)
+    ctx = build_context(conn, ratings, day, exclude=exclude, cands=cands)
     # Le temps déjà passé : le plus grand entre l'estimation des maps jouées et le temps réel
     # (téléchargements, essais hors programme…). Séance écoulée : on ne rajoute plus de maps.
     remaining = session_budget(conn, day) - max(played_minutes, _minutes_played_today(conn, day))
@@ -577,6 +570,41 @@ def build_session(conn, api, ratings: dict, day: str, log=print) -> None:
 
 def _played_today(conn, beatmap_id: int, day: str) -> bool:
     return bool(progression.played_on(conn, beatmap_id, day))
+
+
+def ignore_map(conn, beatmap_id: int, day: str) -> None:
+    """« Ne plus me proposer cette map » : elle sort du programme (et des paliers) et la séance est recalculée."""
+    progression.ignore_map(conn, beatmap_id)
+    conn.execute("DELETE FROM session_plan WHERE day = ? AND beatmap_id = ?", (day, beatmap_id))
+    db.del_meta(conn, "session_key")
+    conn.commit()
+
+
+def forecast_check(conn, today: str, days: int = 14) -> dict:
+    """Le programme tient-il ses promesses ? Compare, sur les jours passés, les objectifs atteints aux prévisions.
+
+    `p` est la chance d'atteindre l'objectif en UN essai : on ne juge donc que le premier essai du jour sur chaque
+    map. Compter « au moins une réussite sur tous les essais » gonflerait les réussites et masquerait un modèle
+    trop optimiste.
+    """
+    since = (datetime.fromisoformat(today) - timedelta(days=days)).date().isoformat()
+    rows = conn.execute(
+        "SELECT day, beatmap_id, category, role, p FROM session_plan WHERE day < ? AND day >= ? AND p IS NOT NULL",
+        (today, since)).fetchall()
+    n = met = predicted = 0.0
+    for r in rows:
+        if r["role"] in ("Échauffement", "Test de niveau"):
+            continue
+        plays = progression.played_on(conn, r["beatmap_id"], r["day"])
+        if not plays:
+            continue
+        first = plays[-1]  # played_on : du plus récent au plus ancien
+        crit = progression.criterion_for(r["category"])
+        n += 1
+        predicted += r["p"]
+        met += progression.meets(bool(first["passed"]), first["accuracy"], first["n_miss"],
+                                 progression.n_objects_of(conn, r["beatmap_id"]), crit)
+    return {"n": int(n), "met": int(met), "predicted": predicted, "any_rows": bool(rows)}
 
 
 def reset_session(conn, day: str) -> None:

@@ -4,7 +4,8 @@ from datetime import datetime
 
 import streamlit as st
 
-from . import progression
+from . import db, planner, progression
+from .fmt import num, pct, stars  # noqa: F401  (réexportés pour les pages)
 from .rating import HP_REF
 from .skills import CRITERIA, LABELS, expected_ar, expected_od
 
@@ -27,7 +28,7 @@ SKILL_PLAIN = {
     "tech": "suivre les sliders et les rythmes inhabituels",
 }
 
-# rôle -> (icône, couleur du badge, rôle des anciennes séances)
+# rôle -> (icône, couleur du badge)
 ROLES = {
     "Échauffement": (":material/local_fire_department:", "orange"),
     "Test de niveau": (":material/straighten:", "violet"),
@@ -42,18 +43,6 @@ OLD_ROLE_NAMES = {"Placement": "Test de niveau", "Palier": "Objectif", "Entretie
 
 def skill_label(cat: str) -> str:
     return "Examen" if cat == "exam" else LABELS[cat]
-
-
-def stars(value: float | None) -> str:
-    return f"{value:.2f}★".replace(".", ",") if value is not None else "?"
-
-
-def pct(value: float) -> str:
-    return f"{value:.2f} %".replace(".", ",")
-
-
-def num(value: float) -> str:
-    return f"{value:g}".replace(".", ",")
 
 
 def length_text(seconds: float) -> str:
@@ -83,6 +72,18 @@ def map_info(conn, beatmap_id: int) -> dict:
         "stars": row["stars"], "attrs": json.loads(row["attrs"]) if row["attrs"] else {},
         "url": f"https://osu.ppy.sh/beatmaps/{beatmap_id}",
     }
+
+
+def game_link(beatmap_id: int) -> str:
+    """Ouvre la map directement dans osu! lazer (téléchargement compris, gratuit dans lazer)."""
+    return f"osu://b/{beatmap_id}"
+
+
+def _ignore(beatmap_id: int, day: str) -> None:
+    """Rappel de bouton : il s'exécute au début du passage suivant, donc avec sa propre connexion."""
+    conn = db.connect()
+    planner.ignore_map(conn, beatmap_id, day)
+    conn.close()
 
 
 def why_map(cat: str, a: dict) -> str:
@@ -173,11 +174,12 @@ def item_state(conn, role: str, cat: str, beatmap_id: int, day: str) -> tuple[st
 
 def map_card(conn, beatmap_id: int, *, role: str | None = None, cat: str, level_c: int = 0,
              number: int | None = None, day: str | None = None, highlight: bool = False,
-             reason: str | None = None, p: float | None = None, minutes: float | None = None) -> None:
-    """Carte d'une map : badges, titre, pourquoi la jouer, objectif et statut.
+             reason: str | None = None, p: float | None = None, minutes: float | None = None,
+             ignorable: bool = False) -> None:
+    """Carte d'une map : badges, titre, pourquoi la jouer, objectif, statut et liens.
 
     reason, p et minutes viennent du planificateur : pourquoi cette map, tes chances d'atteindre
-    l'objectif et le temps estimé.
+    l'objectif et le temps estimé. ignorable ajoute « Ne plus me proposer » (programme du jour).
     """
     info = map_info(conn, beatmap_id)
     crit = progression.criterion_for(cat)
@@ -216,8 +218,16 @@ def map_card(conn, beatmap_id: int, *, role: str | None = None, cat: str, level_
             if p is not None and role not in ("Échauffement", "Test de niveau"):
                 goal += f" Tes chances : environ {round(p * 100)} %."
             st.caption(goal)
-        if highlight:
-            st.link_button("Ouvrir la map sur osu!", info["url"], type="primary", icon=":material/open_in_new:")
+        with st.container(horizontal=True, gap="small"):
+            st.link_button("Ouvrir dans osu!", game_link(beatmap_id), type="primary" if highlight else "secondary",
+                           icon=":material/sports_esports:",
+                           help="Ouvre la map dans osu! lazer, qui la télécharge si besoin.")
+            st.link_button("Page web", info["url"], type="tertiary", icon=":material/open_in_new:")
+            if ignorable and day:
+                st.button("Ne plus me proposer", key=f"ignore-{beatmap_id}-{number}", type="tertiary",
+                          icon=":material/block:", on_click=_ignore, args=(beatmap_id, day),
+                          help="Elle sort du programme et des paliers (une autre la remplace). "
+                               "Annulable dans l'onglet Progression.")
 
 
 def since(iso: str) -> str:

@@ -3,17 +3,19 @@ import json
 import time
 from datetime import date
 
-from . import db, lazer, model, planner, progression, rating
+from . import db, lazer, model, planner, progression, rating, rewards
 from . import mods as modlib
 from .api import OsuApi
 from .config import OSU_USERNAME
-from .maps import backfill_hp, ensure_attrs_many, load_bundled_pool, reclassify_if_needed
+from .maps import (backfill_hp, ensure_attrs_many, load_bundled_pool, recompute_if_engine_changed,
+                   reclassify_if_needed)
 
 # Statuts pour lesquels osu! enregistre les scores : ailleurs, « pas de score » ne veut rien dire.
 SCORED_STATUSES = ("ranked", "approved", "loved", "qualified")
 # À partir de combien d'essais sans aucun score on considère la map comme jamais passée.
 INFERRED_FAIL_MIN_PLAYS = 3
 INFERRED_FAIL_DATE = "2000-01-01T00:00:00Z"  # date inconnue : rangé avant tout le reste
+DUPLICATE_WINDOW_S = 15  # deux parties de la même map à moins de 15 s d'écart = la même partie
 
 
 def store_score(conn, s: dict, source: str) -> bool:
@@ -23,6 +25,15 @@ def store_score(conn, s: dict, source: str) -> bool:
     stats = s.get("statistics") or {}
     if s.get("beatmap"):
         db.upsert_beatmap(conn, s["beatmap"], s.get("beatmapset") or {})
+    # Une partie lue dans lazer avant d'avoir reçu son identifiant en ligne (id négatif) et la même partie
+    # revenue de l'API : on garde la version en ligne, jamais les deux.
+    twin = """SELECT score_id FROM scores WHERE beatmap_id = ? AND score_id {} 0 AND source != 'inferred_fail'
+              AND abs(julianday(ended_at) - julianday(?)) * 86400 < ?"""
+    if s["id"] < 0 and conn.execute(twin.format(">"), (s["beatmap_id"], s["ended_at"], DUPLICATE_WINDOW_S)).fetchone():
+        return False
+    if s["id"] > 0:
+        conn.execute(f"DELETE FROM scores WHERE score_id IN ({twin.format('<')})",
+                     (s["beatmap_id"], s["ended_at"], DUPLICATE_WINDOW_S))
     cur = conn.execute(
         """INSERT OR IGNORE INTO scores VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
@@ -103,23 +114,44 @@ def update_inferred_fails(conn) -> None:
     conn.commit()
 
 
+class WrongPlayer(RuntimeError):
+    """La base suit déjà un autre joueur : mélanger deux joueurs fausserait toutes les notes."""
+
+
 def sync(username: str | None = None, log=print, api=None) -> dict:
+    with db.sync_lock():
+        return _sync(username, log, api)
+
+
+def _sync(username: str | None, log, api) -> dict:
     started = time.monotonic()
-    username = (username or OSU_USERNAME).strip()
+    conn = db.connect()
+    known = db.get_meta(conn, "user")
+    username = (username or (known or {}).get("username") or OSU_USERNAME).strip()
     if not username:
         raise ValueError("Indique ton pseudo osu! (OSU_USERNAME dans .env).")
     api = api or OsuApi()
-    conn = db.connect()
+    if db.daily_backup(conn):
+        log("Sauvegarde du jour enregistrée dans le dossier « sauvegardes ».")
+    before = rewards.snapshot(conn)
     load_bundled_pool(conn, log)
     backfill_hp(conn, log)
+    recompute_if_engine_changed(conn, log)
     if reclassify_if_needed(conn):
         removed = progression.refresh_open_tiers(conn)
         if removed:
             log(f"Classement des maps mis à jour : {removed} map(s) de palier remplacée(s).")
 
-    user = api.user(username)
+    same_name = known and username.lower() == known["username"].lower()
+    user = api.user(known["id"] if same_name else username)
     if not user:
         raise ValueError(f"Joueur « {username} » introuvable sur osu!.")
+    if known and user["id"] != known["id"]:
+        raise WrongPlayer(
+            f"Cette base contient les parties de {known['username']}, pas de {user['username']}. "
+            "Mélanger deux joueurs fausserait toutes les notes : pour suivre un autre joueur, copie l'outil "
+            "dans un autre dossier et mets OSU_DATA_DIR=<un dossier vide> dans son fichier .env."
+        )
     stats = user.get("statistics") or {}
     db.set_meta(conn, "user", {
         "id": user["id"],
@@ -163,7 +195,11 @@ def sync(username: str | None = None, log=print, api=None) -> dict:
     planner.build_session(conn, api, ratings, date.today().isoformat(), log)
     db.set_meta(conn, "last_sync", db.now_iso())
     conn.commit()
+    events = rewards.news(before, rewards.snapshot(conn))
+    rewards.record_news(conn, events)
+    for e in events:
+        log(f"{e['title']} : {e['text']}")
     analysed = conn.execute("SELECT count(*) FROM scores WHERE countable = 1").fetchone()[0]
     conn.close()
     log(f"Synchronisation terminée en {time.monotonic() - started:.0f} s ({analysed} parties analysées).")
-    return {"new_scores": new, "first_sync": first_sync}
+    return {"new_scores": new, "first_sync": first_sync, "events": events}

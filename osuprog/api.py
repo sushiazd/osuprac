@@ -111,8 +111,9 @@ class OsuApi:
                     progress(done, len(items))
         return results
 
-    def user(self, username: str) -> dict | None:
-        return self.get(f"/users/@{username}/osu")
+    def user(self, who: str | int) -> dict | None:
+        """Profil d'un joueur, par pseudo ou par identifiant (l'identifiant survit aux changements de pseudo)."""
+        return self.get(f"/users/{who}/osu" if isinstance(who, int) else f"/users/@{who}/osu")
 
     def user_scores(self, user_id: int, kind: str, include_fails: bool = False) -> list[dict]:
         """kind = 'best' ou 'recent'. Parcourt toutes les pages disponibles."""

@@ -1,6 +1,7 @@
 """Attributs des maps en cache et constitution d'un réservoir de maps à proposer."""
 import gzip
 import json
+from importlib.metadata import version
 from pathlib import Path
 
 from . import db
@@ -92,6 +93,36 @@ def backfill_hp(conn, log=print) -> int:
     return updated
 
 
+def rosu_version() -> str:
+    return version("rosu-pp-py")
+
+
+def recompute_if_engine_changed(conn, log=print) -> int:
+    """Quand rosu-pp change de version (souvent parce qu'osu! a modifié son calcul d'étoiles), les étoiles en
+    cache ne correspondent plus au jeu : on recalcule tout depuis les fichiers .osu. Renvoie le nombre de maps."""
+    current, previous = rosu_version(), db.get_meta(conn, "rosu_version")
+    if previous == current:
+        return 0
+    rows = conn.execute("SELECT beatmap_id, mods_key FROM map_attrs").fetchall() if previous else []
+    done = 0
+    if rows:
+        log(f"Nouvelle version du calcul de difficulté ({previous} -> {current}) : recalcul de {len(rows)} maps…")
+        failed = download_many({r["beatmap_id"] for r in rows})
+        for r in rows:
+            if r["beatmap_id"] in failed:
+                continue
+            try:
+                _store(conn, r["beatmap_id"], r["mods_key"],
+                       map_attributes(r["beatmap_id"], json.loads(r["mods_key"]) if r["mods_key"] else []))
+                done += 1
+            except Exception as e:
+                log(f"  map {r['beatmap_id']} ignorée : {e}")
+        log(f"{done} maps recalculées.")
+    db.set_meta(conn, "rosu_version", current)
+    conn.commit()
+    return done
+
+
 def reclassify_if_needed(conn) -> bool:
     """Recalcule les poids par compétence si les règles de classement ont changé."""
     if db.get_meta(conn, "classifier_version") == CLASSIFIER_VERSION:
@@ -116,6 +147,9 @@ def load_bundled_pool(conn, log=print) -> None:
         data = json.load(f)
     if db.get_meta(conn, "bundled_pool") == data["version"]:
         return
+    if data.get("rosu") and data["rosu"] != rosu_version():
+        log(f"Catalogue calculé avec rosu-pp {data['rosu']} (tu as la {rosu_version()}) : ses étoiles peuvent "
+            "différer un peu du jeu. Pour le mettre à jour : python tools/build_pool.py")
     known = {r["beatmap_id"] for r in conn.execute("SELECT beatmap_id FROM map_attrs WHERE mods_key = ''")}
     for m in data["maps"]:
         db.upsert_beatmap(
