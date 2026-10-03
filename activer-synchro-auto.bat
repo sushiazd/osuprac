@@ -15,5 +15,6 @@ if errorlevel 1 (
 )
 echo.
 echo Synchro automatique activee : toutes les heures tant que ton PC est allume et ta session ouverte.
-echo Le journal est dans data\sync.log.
+echo Le journal est dans %LOCALAPPDATA%\osu-progression\sync.log.
+echo Un palier valide ou un succes debloque s'affichera en notification Windows.
 pause

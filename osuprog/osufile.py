@@ -139,3 +139,68 @@ def pattern_features(content: bytes, clock_rate: float = 1.0) -> dict:
         "stream_bpm": round(15000 / statistics.median(dts), 1) if dts else 0.0,
         "n_objects": n,
     }
+
+
+def movement_features(content: bytes, clock_rate: float = 1.0) -> dict:
+    """Sauts, angles, rythme et vitesse des sliders, mesurés directement dans le fichier .osu.
+
+    - jump_vel : 90e centile de la vitesse des sauts (diamètres de cercle par seconde, hors streams) ;
+    - sharp_frac : part des sauts suivis d'un angle aigu (< 60°), les plus durs à viser ;
+    - rhythm_irregular : part des écarts entre notes qui ne sont ni égaux, ni doubles, ni moitiés du précédent ;
+    - sv_changes : nombre de vitesses de slider différentes, par minute de map.
+    """
+    import math
+
+    text = content.decode("utf-8", "replace")
+    section, cs, objs, svs = "", 5.0, [], set()
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("["):
+            section = line
+            continue
+        if not line:
+            continue
+        if section == "[Difficulty]" and line.startswith("CircleSize:"):
+            cs = float(line.split(":", 1)[1])
+        elif section == "[TimingPoints]":
+            p = line.split(",")
+            if len(p) >= 2 and (len(p) < 7 or p[6].strip() == "0") and float(p[1]) < 0:
+                svs.add(round(-100 / float(p[1]), 2))
+        elif section == "[HitObjects]":
+            p = line.split(",")
+            if len(p) >= 4 and not int(p[3]) & 8:
+                objs.append((int(float(p[2])) / clock_rate, float(p[0]), float(p[1])))
+    objs.sort()
+    empty = {"jump_vel": 0.0, "sharp_frac": 0.0, "rhythm_irregular": 0.0, "sv_changes": 0.0}
+    if len(objs) < 10:
+        return empty
+    diameter = 2 * (54.4 - 4.48 * cs)
+    vels, jumps, sharp, ratios = [], 0, 0, []
+    for k in range(1, len(objs)):
+        (t0, x0, y0), (t1, x1, y1) = objs[k - 1], objs[k]
+        dt = t1 - t0
+        if dt <= STREAM_DT_MS or dt > 1000:
+            continue
+        d = math.hypot(x1 - x0, y1 - y0) / diameter
+        vels.append(d / dt * 1000)
+        if d >= 1.5 and k + 1 < len(objs):
+            jumps += 1
+            x2, y2 = objs[k + 1][1], objs[k + 1][2]
+            a = (x0 - x1, y0 - y1)
+            b = (x2 - x1, y2 - y1)
+            na, nb = math.hypot(*a), math.hypot(*b)
+            if na and nb and math.degrees(math.acos(max(-1, min(1, (a[0] * b[0] + a[1] * b[1]) / (na * nb))))) < 60:
+                sharp += 1
+    for k in range(2, len(objs)):
+        d1, d2 = objs[k - 1][0] - objs[k - 2][0], objs[k][0] - objs[k - 1][0]
+        if d1 > 0 and d2 > 0 and d1 <= 1000 and d2 <= 1000:
+            r = d2 / d1
+            ratios.append(not any(abs(r - target) <= 0.1 * target for target in (0.5, 1.0, 2.0)))
+    minutes = max(0.5, (objs[-1][0] - objs[0][0]) / 60000)
+    vels.sort()
+    return {
+        "jump_vel": round(vels[int(0.9 * (len(vels) - 1))], 2) if vels else 0.0,
+        "sharp_frac": round(sharp / jumps, 3) if jumps else 0.0,
+        "rhythm_irregular": round(sum(ratios) / len(ratios), 3) if ratios else 0.0,
+        "sv_changes": round(max(0, len(svs) - 1) / minutes, 2),
+    }

@@ -28,15 +28,16 @@ Double-clique sur `lancer.bat`, ou lance :
 .\.venv\Scripts\streamlit run app.py
 ```
 
-Le tableau de bord s'ouvre dans le navigateur, avec 5 onglets :
+Le tableau de bord s'ouvre dans le navigateur, avec 6 onglets :
 
-- **Aujourd'hui** : les maps à jouer dans l'ordre. Chacune indique pourquoi la jouer et l'objectif à atteindre.
-- **Mes compétences** : ta note dans chaque compétence, expliquée en clair, et son évolution.
+- **Aujourd'hui** : les maps à jouer dans l'ordre. Chacune indique pourquoi la jouer et l'objectif à atteindre. « Ouvrir dans osu! » affiche la map dans lazer (qui la télécharge), « Ne plus me proposer » l'écarte pour de bon.
+- **Mes compétences** : ta note dans chaque compétence avec sa marge d'erreur, son évolution, et ta précision au clic tirée de tes replays.
 - **Progression** : ton niveau validé, ce qu'il manque pour le suivant, et les paliers de chaque compétence.
+- **Succès** : ta série de jours joués, le bilan de la semaine et les succès débloqués.
 - **Historique** : toutes les parties analysées et leur effet sur tes notes.
 - **Guide** : ce que veulent dire tous les chiffres.
 
-Le thème (rose osu!, clair ou sombre) se règle dans `.streamlit/config.toml` ; le mode clair/sombre se choisit dans le menu ⋮ > Settings. Clique sur **Synchroniser** après chaque session de jeu. L'API ne garde tes parties récentes (fails compris) que 24 h : synchronise au moins une fois par jour.
+Le thème (rose osu!, clair ou sombre) se règle dans `.streamlit/config.toml` ; le mode clair/sombre se choisit dans le menu ⋮ > Settings. Avec le **suivi en direct** (activé par défaut dans la barre de gauche), le tableau de bord se synchronise tout seul à la fin de chaque partie dans lazer : la map se coche et la suivante s'affiche. Sinon, clique sur **Synchroniser** après ta session. L'API ne garde tes parties récentes (fails compris) que 24 h : synchronise au moins une fois par jour.
 
 La synchronisation marche aussi sans l'interface :
 
@@ -51,7 +52,7 @@ La synchronisation marche aussi sans l'interface :
 - **En ligne, depuis ton inscription :** ton meilleur score sur chaque map, le nombre de fois où tu as joué chaque map, et tes parties des dernières 24 h (fails compris). Une map classée jouée au moins 3 fois sans aucun score enregistré compte comme jamais passée.
 - **Dans osu! lazer, sur ce PC :** toutes les parties terminées depuis l'installation de lazer, y compris tes passes moins bonnes, les maps non classées et les parties jouées sans être connecté (« Guest »). Nécessite [Node.js](https://nodejs.org) ; le fichier de lazer est lu sur une copie, jamais modifié.
 
-Ce qui reste hors d'atteinte : les fails de plus de 24 h qu'osu! n'a jamais gardés, et les parties quittées en cours (jamais envoyées). Pour ne plus perdre aucun fail à partir de maintenant, double-clique une fois sur `activer-synchro-auto.bat` : une tâche Windows synchronise alors toutes les heures, sans ouvrir de fenêtre (journal dans `data/sync.log`). Pour la retirer : `schtasks /Delete /TN "osu-progression sync" /F`.
+Ce qui reste hors d'atteinte : les fails de plus de 24 h qu'osu! n'a jamais gardés, et les parties quittées en cours (jamais envoyées). Pour ne plus perdre aucun fail à partir de maintenant, double-clique une fois sur `activer-synchro-auto.bat` : une tâche Windows synchronise alors toutes les heures, sans ouvrir de fenêtre (journal dans `%LOCALAPPDATA%\osu-progression\sync.log`, notification Windows quand tu valides un palier ou débloques un succès). Pour la retirer : `schtasks /Delete /TN "osu-progression sync" /F`.
 
 La première synchronisation prend quelques secondes (un peu plus si tu as joué des milliers de maps). Les suivantes ne relisent que les maps rejouées depuis la dernière fois. Un catalogue de ~2 900 maps déjà analysées (`osuprog/pool.json.gz`) est fourni pour choisir les maps de palier sans rien télécharger.
 
@@ -94,7 +95,24 @@ Chaque map indique pourquoi elle est là, tes chances d'atteindre l'objectif et 
 - Planificateur d'entraînement (intensités, plafond de part par compétence, variété) : en tête de `osuprog/planner.py`. Incrémente `PLAN_FORMAT` après un changement
 - Taille des paliers, nombre de maps, validation d'office : en tête de `osuprog/progression.py`
 
-Pour repartir de zéro (paliers compris), supprime `data/osu.sqlite`. Les fichiers `.osu` restent en cache dans `data/maps`.
+## Données et sauvegardes
+
+- Les données vivent dans `%LOCALAPPDATA%\osu-progression` (base `osu.sqlite`, cache `maps`, journal `sync.log`), **hors** du dossier du projet : un dossier synchronisé comme OneDrive peut verrouiller ou dupliquer une base en cours d'écriture. Un ancien dossier `data/` est recopié automatiquement au premier lancement (puis laissé tel quel : tu peux le supprimer). Pour choisir un autre endroit : `OSU_DATA_DIR=...` dans `.env`.
+- Une sauvegarde de la base est faite chaque jour dans `sauvegardes/` (dans le projet, donc sauvegardée par OneDrive si le projet y est) ; les 7 dernières sont gardées. Pour revenir en arrière, copie l'une d'elles à la place de `osu.sqlite`, tableau de bord fermé.
+- Une base suit **un seul joueur** : une synchro sur un autre pseudo est refusée, pour ne pas mélanger les parties. Pour suivre un autre joueur, copie l'outil ailleurs avec un autre `OSU_DATA_DIR`.
+- Pour repartir de zéro (paliers compris), supprime `osu.sqlite`. Les fichiers `.osu` restent en cache dans `maps`.
+
+## Pour développer
+
+```bash
+.\.venv\Scripts\python -m pip install -r requirements-dev.txt
+```
+
+```bash
+.\.venv\Scripts\python -m pytest
+```
+
+Les tests utilisent une base temporaire, jamais la tienne. `python tools/eval_classifier.py` compare des façons de classer les maps sur tes propres parties (prédiction partie par partie) : à relancer avant tout changement de `classify()`. Le 2026-10-04, ajouter les sauts, angles, rythmes irréguliers et changements de vitesse des sliders n'améliorait pas la prédiction de façon significative : le classement est resté tel quel.
 
 ## Limites
 
@@ -102,4 +120,5 @@ Pour repartir de zéro (paliers compris), supprime `data/osu.sqlite`. Les fichie
 - Sans Node.js, les parties locales de lazer sont ignorées (la synchro en ligne marche quand même). Pour l'installer : `winget install -e --id OpenJS.NodeJS.LTS`.
 - Seules les parties en osu! standard sont prises en compte. Les mods fun (relax, autopilot, auto...) sont ignorés.
 - Une partie avec EZ, HT ou DA compte dans ta note (avec les étoiles réduites), mais ne valide pas un palier.
-- Le classement des maps est une heuristique : si une map te semble mal classée, ajuste les seuils dans `classify()`.
+- Le classement des maps est une heuristique : si une map te semble mal classée, ajuste les seuils dans `classify()`. Les écarts entre tes compétences sont souvent dans la marge d'erreur : l'onglet *Mes compétences* indique lesquels sont vraiment nets.
+- L'analyse des replays (précision au clic) est une reconstitution simplifiée du jeu : vérifiée sur 280 replays (corrélation de 0,97 avec les vrais miss), fiable en tendance, pas à la note près.
