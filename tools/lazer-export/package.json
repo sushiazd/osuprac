@@ -1,0 +1,9 @@
+{
+  "name": "osu-lazer-export",
+  "private": true,
+  "description": "Exporte en JSON les scores locaux d'osu! lazer (lecture d'une copie de client.realm).",
+  "type": "commonjs",
+  "dependencies": {
+    "realm": "^20.2.0"
+  }
+}

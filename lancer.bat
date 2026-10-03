@@ -1,0 +1,69 @@
+@echo off
+rem Double-clic : installe tout la premiere fois, puis ouvre le tableau de bord.
+cd /d "%~dp0"
+set "PYDIR=%LOCALAPPDATA%\Programs\Python\Python312"
+
+if exist ".venv\Scripts\python.exe" goto deps
+
+call :find_python
+if not defined PYEXE call :install_python
+if not defined PYEXE goto no_python
+
+echo Premiere installation : creation de l'environnement Python...
+"%PYEXE%" %PYARGS% -m venv .venv
+if not exist ".venv\Scripts\python.exe" goto no_python
+
+:deps
+if exist ".venv\Scripts\streamlit.exe" goto env
+echo Installation des dependances, 1 a 2 minutes...
+".venv\Scripts\python.exe" -m pip install --disable-pip-version-check -q -r requirements.txt
+if errorlevel 1 goto deps_failed
+
+:env
+if exist ".env" goto run
+copy ".env.example" ".env" >nul
+echo.
+echo Remplis le fichier .env qui vient de s'ouvrir : ID client, secret client et pseudo osu!.
+echo Le README explique comment creer ta cle API. Enregistre, puis relance ce fichier.
+start "" notepad ".env"
+pause
+exit /b 0
+
+:run
+rem Ferme les anciens serveurs du tableau de bord : on repart toujours sur la derniere version du code.
+powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -in 'streamlit.exe','python.exe' -and $_.CommandLine -like '*%~dp0.venv*streamlit*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
+".venv\Scripts\streamlit.exe" run app.py --server.port 8501
+exit /b
+
+:find_python
+set "PYEXE="
+set "PYARGS="
+py -3 --version >nul 2>nul && (set "PYEXE=py" & set "PYARGS=-3" & exit /b)
+python --version >nul 2>nul && (set "PYEXE=python" & exit /b)
+if exist "%PYDIR%\python.exe" set "PYEXE=%PYDIR%\python.exe"
+exit /b
+
+:install_python
+echo.
+echo Python n'est pas installe sur ce PC.
+where winget >nul 2>nul || exit /b
+choice /C ON /M "Installer Python 3.12 maintenant avec winget, sans droits admin ? O = oui, N = non"
+if errorlevel 2 exit /b
+winget install -e --id Python.Python.3.12 --scope user --accept-package-agreements --accept-source-agreements
+if exist "%PYDIR%\python.exe" set "PYEXE=%PYDIR%\python.exe"
+exit /b
+
+:no_python
+echo.
+echo Python est introuvable. Installe Python 3.12 depuis la page qui vient de s'ouvrir,
+echo en cochant "Add python.exe to PATH" en bas de la premiere fenetre, puis relance ce fichier.
+start "" https://www.python.org/downloads/
+pause
+exit /b 1
+
+:deps_failed
+echo L'installation des dependances a echoue.
+echo Si l'erreur parle d'un chemin introuvable, le dossier est trop profond pour Windows :
+echo deplace-le plus pres de la racine, par exemple C:\osu-progression, puis relance.
+pause
+exit /b 1
