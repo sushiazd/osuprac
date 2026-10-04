@@ -7,6 +7,8 @@ Un outil perso qui mesure ton niveau dans chaque compétence d'osu! (lazer), rep
 1. Installe [Python 3.12](https://www.python.org/downloads/) en cochant **Add python.exe to PATH**, puis décompresse le dossier dans un endroit au chemin court (Documents, Bureau ou `C:\osu-progression`). Windows limite la longueur des chemins de fichiers, et certaines dépendances sont rangées très profond.
 2. Crée ta clé API : [osu.ppy.sh/home/account/edit](https://osu.ppy.sh/home/account/edit#oauth), section **OAuth**, puis **Nouvelle application OAuth**. Mets le nom que tu veux et `http://localhost` comme URL de rappel (elle ne sert pas). Chaque joueur doit créer la sienne.
 3. Double-clique sur `lancer.bat`. La première fois, il installe les dépendances (1 à 2 minutes) et ouvre le fichier `.env` : remplis `OSU_CLIENT_ID`, `OSU_CLIENT_SECRET` et `OSU_USERNAME`, enregistre, puis relance `lancer.bat`.
+4. Conseillé : installe [Node.js](https://nodejs.org) (version LTS) **avant** le premier lancement. L'outil pourra alors lire tes parties locales d'osu! lazer (fails compris), analyser tes replays et cocher les maps dès la fin de chaque partie. `lancer.bat` installe le reste tout seul.
+5. Optionnel : double-clique sur `activer-synchro-auto.bat` pour une synchro toutes les heures, même tableau de bord fermé.
 
 Sans le `.bat`, ouvre un terminal **dans le dossier qui contient `app.py`** et lance, dans l'ordre :
 

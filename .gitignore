@@ -5,3 +5,4 @@ __pycache__/
 .pytest_cache/
 tools/lazer-export/node_modules/
 sauvegardes/
+osu-progression.zip

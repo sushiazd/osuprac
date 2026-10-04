@@ -1,3 +1,8 @@
 * text=auto eol=lf
 *.bat text eol=crlf
 *.gz binary
+# Exclus de l'archive à partager (outils de développement)
+.claude export-ignore
+.agents export-ignore
+tests export-ignore
+requirements-dev.txt export-ignore

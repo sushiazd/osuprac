@@ -14,10 +14,25 @@ echo Premiere installation : creation de l'environnement Python...
 if not exist ".venv\Scripts\python.exe" goto no_python
 
 :deps
-if exist ".venv\Scripts\streamlit.exe" goto env
+if exist ".venv\Scripts\streamlit.exe" goto lazer
 echo Installation des dependances, 1 a 2 minutes...
 ".venv\Scripts\python.exe" -m pip install --disable-pip-version-check -q -r requirements.txt
 if errorlevel 1 goto deps_failed
+
+:lazer
+rem Lecteur des parties locales de lazer (optionnel, demande Node.js) : installe une seule fois.
+if exist "tools\lazer-export\node_modules\realm" goto env
+if not exist "%APPDATA%\osu\client.realm" goto env
+where node >nul 2>nul || (
+    echo Astuce : installe Node.js ^(https://nodejs.org^) pour que l'outil lise aussi tes parties locales de lazer.
+    goto env
+)
+echo Installation du lecteur de parties lazer, une seule fois...
+pushd tools\lazer-export
+call npm install --omit=dev --no-audit --no-fund --loglevel=error
+rem Le paquet pese ~680 Mo, presque tout pour iPhone et Android : on ne garde que la version Windows (~9 Mo).
+node -e "const fs=require('fs'),p=require('path'),d=p.join('node_modules','realm','prebuilds');if(fs.existsSync(d))for(const n of fs.readdirSync(d))if(n!=='node')fs.rmSync(p.join(d,n),{recursive:true,force:true})"
+popd
 
 :env
 if exist ".env" goto run
