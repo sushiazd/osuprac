@@ -25,8 +25,8 @@ def conn(tmp_path):
 def add_map(conn, beatmap_id, stars=3.0, weights=None, set_id=None, n_objects=300, hp=4.0, status="ranked",
             length_s=120.0, mods_key=""):
     weights = weights or {"aim": 1.0}
-    conn.execute("INSERT OR REPLACE INTO beatmaps VALUES (?, ?, 'Artiste', ?, 'Hard', 'Mapper', ?, 1000, 10)",
-                 (beatmap_id, set_id or beatmap_id, f"Map {beatmap_id}", status))
+    conn.execute("INSERT OR REPLACE INTO beatmaps VALUES (?, ?, 'Artiste', ?, 'Hard', ?, ?, 1000, 10)",
+                 (beatmap_id, set_id or beatmap_id, f"Map {beatmap_id}", f"Mapper {beatmap_id}", status))
     attrs = {"stars": stars, "hp": hp, "n_objects": n_objects, "length_s": length_s}
     conn.execute("INSERT OR REPLACE INTO map_attrs VALUES (?, ?, ?, ?, ?, ?)",
                  (beatmap_id, mods_key, stars, max(weights, key=weights.get), json.dumps(attrs), json.dumps(weights)))

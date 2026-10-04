@@ -29,7 +29,7 @@ from .model import CALIBRATED_GAMES, DEFAULT_CLEAR_SCALE
 from .rating import HP_REF, effective_stars
 from .skills import CATEGORIES, CRITERIA, LABELS
 
-PLAN_FORMAT = 15               # à incrémenter quand l'algorithme change
+PLAN_FORMAT = 16               # à incrémenter quand l'algorithme change
 # intensité -> (chances de FINIR la map visées, chances d'atteindre l'OBJECTIF de précision visées)
 # « équilibré » est le réglage le plus robuste en simulation (meilleure moyenne et meilleur pire cas
 # sous quatre hypothèses d'apprentissage, voir tools/simulate_training.py).
@@ -515,55 +515,77 @@ def session_budget(conn, day: str) -> float:
 
 
 def add_session_time(conn, day: str, minutes: int) -> None:
-    """Rallonge la séance du jour de `minutes` minutes à partir de maintenant : de nouvelles maps sont proposées."""
+    """Rallonge la séance du jour de `minutes` minutes à partir de maintenant : des maps sont ajoutées à la fin."""
     current = db.get_meta(conn, "session_extra", {}).get(day, 0)
     overrun = max(0.0, _minutes_played_today(conn, day) - session_budget(conn, day))  # temps déjà dépassé
     db.set_meta(conn, "session_extra", {day: round(current + overrun + minutes)})
-    db.del_meta(conn, "session_key")
     conn.commit()
 
 
-def build_session(conn, api, ratings: dict, day: str, log=print) -> None:
-    """Construit (ou ajuste) la séance du jour.
+TRIM_TOLERANCE_MIN = 2.0  # on ne retire une map prévue que si la séance déborde de plus de 2 min
 
-    Si tu as déjà joué des maps du programme, elles restent en tête ; le reste est recalculé avec tes
-    nouvelles notes. Sans changement de situation, la séance reste identique toute la journée.
+
+def fit_pending(pending_minutes: list[float], used: float, budget: float) -> int:
+    """Combien de maps prévues (non jouées) garder, dans l'ordre, pour tenir dans le temps qui reste."""
+    keep = len(pending_minutes)
+    while keep and used + sum(pending_minutes[:keep]) > budget + TRIM_TOLERANCE_MIN:
+        keep -= 1
+    return keep
+
+
+def build_session(conn, api, ratings: dict, day: str, log=print) -> None:
+    """Construit ou ajuste la séance du jour.
+
+    Le programme reste STABLE dans la journée : une partie jouée, une map écartée ou une durée changée ne font
+    que retirer la map concernée et compléter (ou raccourcir) la fin de la liste. On ne retire tout au sort que
+    pour un nouveau jour, un changement de difficulté, ou « Proposer d'autres maps ». Les maps jouées restent en
+    tête.
     """
     cfg = settings(conn)
-    key = [PLAN_FORMAT, day, session_budget(conn, day), cfg["intensity"], _plays_today(conn, day),
-           db.get_meta(conn, "session_variant", {}).get(day, 0)]
+    ignored = progression.ignored_maps(conn)
+    base = [PLAN_FORMAT, day, cfg["intensity"], db.get_meta(conn, "session_variant", {}).get(day, 0)]
+    key = base + [session_budget(conn, day), _plays_today(conn, day), len(ignored)]
+    stored = db.get_meta(conn, "session_key")
     existing = conn.execute("SELECT * FROM session_plan WHERE day = ? ORDER BY pos", (day,)).fetchall()
-    if existing and db.get_meta(conn, "session_key") == key:
+    if existing and stored == key:
         return
+    full = not existing or not stored or stored[:len(base)] != base
 
-    cands = load_candidates(conn)
-    kept = [r for r in existing if _played_today(conn, r["beatmap_id"], day)]
-    played_minutes = sum((r["minutes"] or 0) for r in kept)
-    exclude = {r["beatmap_id"] for r in kept} | progression.ignored_maps(conn)
-    ctx = build_context(conn, ratings, day, exclude=exclude, cands=cands)
-    # Le temps déjà passé : le plus grand entre l'estimation des maps jouées et le temps réel
-    # (téléchargements, essais hors programme…). Séance écoulée : on ne rajoute plus de maps.
-    remaining = session_budget(conn, day) - max(played_minutes, _minutes_played_today(conn, day))
-    ctx.budget_min = max(3.0, remaining)
-    ctx.warmed_up = bool(kept) or _plays_today(conn, day) > 0
-    ctx.done_roles = {r["role"] for r in kept}
-    items, summary = plan(ctx, cands)
-    if remaining < 3.0:
-        items = []
+    played = [r for r in existing if _played_today(conn, r["beatmap_id"], day)]
+    played_ids = {r["beatmap_id"] for r in played}
+    pending = [] if full else [r for r in existing
+                               if r["beatmap_id"] not in played_ids and r["beatmap_id"] not in ignored]
+    budget = session_budget(conn, day)
+    # Le temps déjà passé : le plus grand entre l'estimation des maps jouées et le temps réel (téléchargements,
+    # essais hors programme…).
+    used = max(sum((r["minutes"] or 0) for r in played), _minutes_played_today(conn, day))
+    pending = pending[:fit_pending([r["minutes"] or 0 for r in pending], used, budget)]
+    remaining = budget - used - sum((r["minutes"] or 0) for r in pending)
+
+    items, summary = [], None
+    if remaining >= 3.0:
+        cands = load_candidates(conn)
+        exclude = {r["beatmap_id"] for r in existing} | ignored
+        ctx = build_context(conn, ratings, day, exclude=exclude, cands=cands)
+        ctx.budget_min = remaining
+        ctx.warmed_up = bool(played or pending) or _plays_today(conn, day) > 0
+        ctx.done_roles = {r["role"] for r in played + pending}
+        items, summary = plan(ctx, cands)
 
     conn.execute("DELETE FROM session_plan WHERE day = ?", (day,))
     rows = [(day, i, r["role"], r["category"], r["level_c"], r["beatmap_id"], r["reason"], r["p"], r["minutes"], r["share"])
-            for i, r in enumerate(kept)]
-    rows += [(day, len(kept) + i, it.role, it.category, it.level_c, it.beatmap_id, it.reason, it.p, it.minutes, it.share)
+            for i, r in enumerate(played + pending)]
+    rows += [(day, len(rows) + i, it.role, it.category, it.level_c, it.beatmap_id, it.reason, it.p, it.minutes, it.share)
              for i, it in enumerate(items)]
     conn.executemany("INSERT INTO session_plan (day, pos, role, category, level_c, beatmap_id, reason, p, minutes, share) "
                      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
-    summary["day"] = day
-    summary["intensity"] = cfg["intensity"]
-    summary["budget"] = float(cfg["minutes"])
-    summary["shares"] = {s: round(v, 4) for s, v in summary["shares"].items()}
-    summary["parts"] = {s: {k: round(v, 4) for k, v in p.items()} for s, p in summary["parts"].items()}
-    db.set_meta(conn, "plan_summary", summary)
+    if summary and (full or not db.get_meta(conn, "plan_summary")):
+        summary["day"] = day
+        summary["intensity"] = cfg["intensity"]
+        summary["budget"] = float(cfg["minutes"])
+        summary["shares"] = {s: round(v, 4) for s, v in summary["shares"].items()}
+        summary["parts"] = {s: {k: round(v, 4) for k, v in p.items()} for s, p in summary["parts"].items()}
+        db.set_meta(conn, "plan_summary", summary)
     db.set_meta(conn, "session_key", key)
     conn.commit()
 
@@ -573,10 +595,11 @@ def _played_today(conn, beatmap_id: int, day: str) -> bool:
 
 
 def ignore_map(conn, beatmap_id: int, day: str) -> None:
-    """« Ne plus me proposer cette map » : elle sort du programme (et des paliers) et la séance est recalculée."""
+    """« Ne plus me proposer cette map » : elle sort du programme (et des paliers) ; une autre est ajoutée en fin
+    de liste au prochain affichage. Déjà jouée aujourd'hui, elle reste dans les maps terminées."""
     progression.ignore_map(conn, beatmap_id)
-    conn.execute("DELETE FROM session_plan WHERE day = ? AND beatmap_id = ?", (day, beatmap_id))
-    db.del_meta(conn, "session_key")
+    if not _played_today(conn, beatmap_id, day):
+        conn.execute("DELETE FROM session_plan WHERE day = ? AND beatmap_id = ?", (day, beatmap_id))
     conn.commit()
 
 

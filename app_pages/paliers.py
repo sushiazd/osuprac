@@ -27,9 +27,7 @@ def met_count(cat: str, maps: list) -> int:
 
 def _unignore(beatmap_id: int) -> None:
     c = db.connect()
-    progression.unignore_map(c, beatmap_id)
-    db.del_meta(c, "session_key")
-    c.commit()
+    progression.unignore_map(c, beatmap_id)  # la séance du jour s'ajuste toute seule (sans tout retirer au sort)
     c.close()
 
 
