@@ -13,6 +13,8 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
+rem Par defaut, Windows ne lance pas la tache sur batterie et saute les heures manquees pendant la veille.
+powershell -NoProfile -Command "$s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 10) -MultipleInstances IgnoreNew; Set-ScheduledTask -TaskName 'osu-progression sync' -Settings $s | Out-Null"
 echo.
 echo Synchro automatique activee : toutes les heures tant que ton PC est allume et ta session ouverte.
 echo Le journal est dans %LOCALAPPDATA%\osu-progression\sync.log.
