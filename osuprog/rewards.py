@@ -22,6 +22,7 @@ class Achievement:
     icon: str
     unlocked: str | None = None      # jour local du déblocage
     progress: float = 0.0            # 0 à 1 tant qu'il n'est pas débloqué
+    level: int = 0                   # rang dans son échelle (0 = premier palier) : sert à la couleur du badge
 
 
 # --- Série de jours -----------------------------------------------------------------------------
@@ -72,9 +73,9 @@ def _nth_day(days: list[str], n: int) -> str | None:
 def _ladder(group, icon, steps, make, value, when) -> list[Achievement]:
     """Une échelle de succès : tous ceux débloqués, puis le prochain (avec sa progression)."""
     out = []
-    for step in steps:
+    for level, step in enumerate(steps):
         title, text = make(step)
-        a = Achievement(f"{group}:{step}", group, title, text, icon, when(step))
+        a = Achievement(f"{group}:{step}", group, title, text, icon, when(step), level=level)
         if a.unlocked is None:
             a.progress = max(0.0, min(0.99, value / step)) if isinstance(step, (int, float)) and value else 0.0
             out.append(a)
@@ -95,11 +96,12 @@ def achievements(conn, today: str | None = None) -> list[Achievement]:
                    best_stars, lambda x: _first(passed, lambda p: p["stars"] >= x))
 
     acc_steps = [(85, 3.0), (90, 3.0), (85, 3.5), (95, 3.0), (90, 3.5), (85, 4.0), (90, 4.0), (95, 4.0)]
-    for acc, x in acc_steps:
+    for level, (acc, x) in enumerate(acc_steps):
         out.append(Achievement(f"acc:{acc}:{x}", "acc", f"{acc} % à {fmt.num(x)}★",
                                f"Finir une map de {fmt.stars(x)} ou plus avec au moins {acc} % de précision",
                                ":material/adjust:",
-                               _first(passed, lambda p, acc=acc, x=x: p["stars"] >= x and p["accuracy"] >= acc)))
+                               _first(passed, lambda p, acc=acc, x=x: p["stars"] >= x and p["accuracy"] >= acc),
+                               level=level))
     locked_acc = [a for a in out if a.group == "acc" and not a.unlocked]
     out = [a for a in out if a.group != "acc" or a.unlocked] + locked_acc[:2]
 
@@ -117,7 +119,7 @@ def achievements(conn, today: str | None = None) -> list[Achievement]:
     for r in conn.execute("SELECT level_c, at FROM tier_log WHERE category = 'exam' ORDER BY level_c"):
         out.append(Achievement(f"rank:{r['level_c']}", "rank", f"Niveau {fmt.level(r['level_c'])}",
                                f"Réussir l'examen du niveau {fmt.level(r['level_c'])}", ":material/school:",
-                               db.local_day(r["at"])))
+                               db.local_day(r["at"]), level=4))
 
     days = play_days(conn)
     st = streaks(days, today)

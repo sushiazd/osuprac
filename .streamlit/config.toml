@@ -1,39 +1,36 @@
-# Thème aux couleurs d'osu! (rose), en clair et en sombre.
-# Le mode se choisit dans le menu ⋮ > Settings du tableau de bord.
+# Thème « lazer » : sombre, rose osu!, inspiré de l'interface d'osu! lazer.
+# Les effets (fond animé, cartes, néons) sont dans osuprog/theme.css.
 
 [theme]
-font = "Nunito:https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap"
-headingFontWeights = [800, 800, 700, 700, 600, 600]
-headingFontSizes = ["34px", "26px", "20px", "17px", "15px", "13px"]
-baseRadius = "12px"
+base = "dark"
+primaryColor = "#e8448f"
+backgroundColor = "#0e0a15"
+secondaryBackgroundColor = "#1a1324"
+textColor = "#f3eefa"
+linkColor = "#ff7ab8"
+borderColor = "#2c2340"
+showWidgetBorder = true
+showSidebarBorder = false
+font = "Outfit:https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap"
+headingFont = "'Exo 2':https://fonts.googleapis.com/css2?family=Exo+2:ital,wght@0,600;0,700;0,800;0,900;1,800;1,900&display=swap"
+codeFont = "'JetBrains Mono':https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap"
+headingFontWeights = [900, 800, 800, 700, 700, 600]
+headingFontSizes = ["40px", "28px", "22px", "18px", "15px", "13px"]
+baseRadius = "14px"
 buttonRadius = "full"
 linkUnderline = false
-showSidebarBorder = false
+dataframeHeaderBackgroundColor = "#1f1730"
+dataframeBorderColor = "#2c2340"
+redColor = "#ff4f6f"
+orangeColor = "#ffaa33"
+yellowColor = "#ffd23f"
+greenColor = "#5cf08f"
+blueColor = "#66ccff"
+violetColor = "#aa88ff"
+grayColor = "#8d80a3"
+chartCategoricalColors = ["#ff66aa", "#66ccff", "#ffaa33", "#5cf08f", "#aa88ff", "#4fdbc6"]
 
-[theme.light]
-primaryColor = "#d6336c"
-linkColor = "#c2185b"
-backgroundColor = "#ffffff"
-secondaryBackgroundColor = "#f7f1f5"
-textColor = "#1f1a24"
-borderColor = "#eadfe6"
-chartCategoricalColors = ["#d6336c", "#3b82f6", "#f59e0b", "#10b981", "#8b5cf6", "#06b6d4"]
-
-[theme.light.sidebar]
-backgroundColor = "#fbf6f9"
-secondaryBackgroundColor = "#f3e9ef"
-borderColor = "#eadfe6"
-
-[theme.dark]
-primaryColor = "#d6336c"
-linkColor = "#ff66aa"
-backgroundColor = "#17141f"
-secondaryBackgroundColor = "#221d2d"
-textColor = "#f3eef7"
-borderColor = "#342c42"
-chartCategoricalColors = ["#ff66aa", "#60a5fa", "#fbbf24", "#34d399", "#a78bfa", "#22d3ee"]
-
-[theme.dark.sidebar]
-backgroundColor = "#110e18"
-secondaryBackgroundColor = "#1c1726"
-borderColor = "#2a2336"
+[theme.sidebar]
+backgroundColor = "#0a0710"
+secondaryBackgroundColor = "#17111f"
+borderColor = "#241c33"

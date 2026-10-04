@@ -1,7 +1,9 @@
 """Page de premier lancement : comment connecter l'outil à ton compte osu!."""
 import streamlit as st
 
-st.title("Bienvenue", icon=":material/waving_hand:")
+from osuprog import visuals
+
+st.html(visuals.page_header("waving_hand", "Bienvenue", "Ta progression osu!, compétence par compétence", "#ff66aa"))
 st.markdown(
     "Cet outil analyse tes parties osu!, trouve tes points faibles et te donne chaque jour une liste de maps "
     "à jouer, dans l'ordre, pour progresser le plus vite possible."

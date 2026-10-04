@@ -1,7 +1,7 @@
 """Page « Progression » : niveau validé, paliers par compétence et examen."""
 import streamlit as st
 
-from osuprog import db, fmt, progression
+from osuprog import db, fmt, progression, visuals
 from osuprog.progression import STEP_C
 from osuprog.rating import load as load_ratings
 from osuprog.skills import CATEGORIES, CRITERIA, LABELS
@@ -14,69 +14,62 @@ progress = progression.load_progress(conn)
 rank, target = exam["rank_c"], exam["target_c"]
 ready = [c for c in CATEGORIES if progress.get(c, 0) >= target]
 
-st.title("Ta progression", icon=":material/stairs:")
-st.markdown(
-    f"Chaque compétence a une **échelle de paliers**, un tous les {fmt.level(STEP_C)}. Pour valider un palier, "
-    f"réussis ses **{progression.MAPS_PER_TIER} maps** en atteignant l'objectif de la compétence. Ton **niveau "
-    f"validé** avance de {fmt.level(progression.RANK_STEP_C)} "
-    "quand **toutes** tes compétences ont atteint le niveau suivant et que tu as réussi l'examen."
-)
+st.html(visuals.page_header("stairs", "Ta progression",
+                            "Valide les paliers de chaque compétence, puis passe l'examen du niveau suivant", "#8866ff"))
+st.html(visuals.rank_emblem(rank, target, len(ready), len(CATEGORIES)))
+st.caption(
+    f"Un palier tous les {fmt.level(STEP_C)} : réussis ses **{progression.MAPS_PER_TIER} maps** (objectif de la "
+    f"compétence) pour le valider. Ton niveau avance de {fmt.level(progression.RANK_STEP_C)} quand **toutes** tes "
+    "compétences ont atteint le niveau suivant et que tu as réussi l'examen.")
 
-with st.container(horizontal=True):
-    st.metric("Niveau validé", stars(rank / 100), border=True,
-              help="Le niveau que tu as prouvé dans les 6 compétences à la fois.")
-    st.metric("Prochain niveau", stars(target / 100), border=True)
-    st.metric("Compétences prêtes pour ce niveau", f"{len(ready)}/{len(CATEGORIES)}", border=True)
 
-with st.container(border=True):
-    st.markdown(f"**Pour atteindre le niveau {stars(target / 100)} :**")
-    with st.container(horizontal=True, gap="small"):
-        for cat in CATEGORIES:
-            if cat in ready:
-                st.badge(LABELS[cat], icon=":material/check_circle:", color="green")
-            else:
-                st.badge(f"{LABELS[cat]} : palier {stars((progress.get(cat, 0) + STEP_C) / 100)} en cours",
-                         icon=":material/radio_button_unchecked:", color="gray")
-    if exam["unlocked"]:
-        st.markdown(f"Toutes tes compétences sont prêtes : réussis l'**examen** ci-dessous "
-                    f"({criterion_text(progression.EXAM_CRITERION)} sur chaque map).")
-        maps = conn.execute("SELECT beatmap_id FROM tier_maps WHERE category = 'exam' AND level_c = ? ORDER BY slot",
-                            (target,)).fetchall()
-        for m in maps:
-            map_card(conn, m["beatmap_id"], cat="exam", level_c=target)
-    else:
-        st.caption(f"Valide le palier {stars(target / 100)} dans chaque compétence ; l'examen se débloquera ensuite.")
+def tier_maps(cat: str, level_c: int) -> list:
+    return conn.execute("SELECT beatmap_id FROM tier_maps WHERE category = ? AND level_c = ? ORDER BY slot",
+                        (cat, level_c)).fetchall()
 
-st.subheader("Paliers par compétence", icon=":material/flag:")
+
+def met_count(cat: str, maps: list) -> int:
+    return sum(1 for m in maps if (r := progression.best_result(conn, m["beatmap_id"], CRITERIA[cat])) and r["met"])
+
+
+st.subheader("Passe de paliers", icon=":material/military_tech:")
+tracks = []
+for cat in CATEGORIES:
+    current = progress.get(cat, 0) + STEP_C
+    maps = tier_maps(cat, current)
+    tracks.append(visuals.tier_track(cat, LABELS[cat], current, STEP_C, met_count(cat, maps),
+                                     max(len(maps), progression.MAPS_PER_TIER)))
+st.html("".join(tracks))
+
+if exam["unlocked"]:
+    st.subheader(f"Examen du niveau {stars(target / 100)}", icon=":material/school:")
+    st.success(f"Toutes tes compétences sont prêtes : réussis l'**examen** ({criterion_text(progression.EXAM_CRITERION)} "
+               "sur chaque map) pour monter de niveau.", icon=":material/workspace_premium:")
+    for m in tier_maps("exam", target):
+        map_card(conn, m["beatmap_id"], cat="exam", level_c=target, key="exam")
+else:
+    missing = ", ".join(LABELS[c] for c in exam["missing"])
+    st.caption(f":material/lock: L'examen du niveau {stars(target / 100)} se débloque quand ces compétences ont "
+               f"validé leur palier {stars(target / 100)} : {missing}.")
+
+st.subheader("Maps des paliers en cours", icon=":material/flag:")
 tabs = st.tabs([f"{LABELS[c]} · {stars((progress.get(c, 0) + STEP_C) / 100)}" for c in CATEGORIES])
 for tab, cat in zip(tabs, CATEGORIES):
     with tab:
         current = progress.get(cat, 0) + STEP_C
-        with st.container(horizontal=True, gap="small", vertical_alignment="center"):
-            for level in range(max(STEP_C, current - 2 * STEP_C), current + 3 * STEP_C, STEP_C):
-                if level < current:
-                    st.badge(stars(level / 100), icon=":material/check_circle:", color="green")
-                elif level == current:
-                    st.badge(f"{stars(level / 100)} en cours", icon=":material/flag:", color="primary")
-                else:
-                    st.badge(stars(level / 100), icon=":material/lock:", color="gray")
-        maps = conn.execute("SELECT beatmap_id FROM tier_maps WHERE category = ? AND level_c = ? ORDER BY slot",
-                            (cat, current)).fetchall()
-        met = sum(1 for m in maps if (r := progression.best_result(conn, m["beatmap_id"], CRITERIA[cat])) and r["met"])
-        st.markdown(f"{SKILL_ICONS[cat]} **Palier {stars(current / 100)}** : {met}/{len(maps)} maps réussies. "
-                    f"Objectif sur chaque map : {criterion_text(CRITERIA[cat])}.")
-        st.progress(met / len(maps) if maps else 0.0)
+        maps = tier_maps(cat, current)
+        st.caption(f"{SKILL_ICONS[cat]} **Palier {stars(current / 100)}** : {met_count(cat, maps)}/{len(maps)} maps "
+                   f"réussies. Objectif sur chaque map : {criterion_text(CRITERIA[cat])}.")
         if not maps:
             st.caption("Pas encore de maps pour ce palier : clique sur Synchroniser.")
         for m in maps:
-            map_card(conn, m["beatmap_id"], cat=cat, level_c=current)
+            map_card(conn, m["beatmap_id"], cat=cat, level_c=current, key=f"tier-{cat}")
         log = conn.execute("SELECT level_c, how FROM tier_log WHERE category = ? ORDER BY level_c DESC LIMIT 6",
                            (cat,)).fetchall()
         if log:
             st.caption("Paliers validés : " + " · ".join(f"{stars(r['level_c'] / 100)} ({r['how']})" for r in log))
         st.caption(f"Si ta note {LABELS[cat]} dépasse le palier en cours de {fmt.level(progression.AUTO_SKIP_MARGIN_C)} "
-                   "(avec au moins "
-                   f"{progression.AUTO_SKIP_GAMES} parties), le palier est validé d'office.")
+                   f"(avec au moins {progression.AUTO_SKIP_GAMES} parties), le palier est validé d'office.")
 
 retired = db.get_meta(conn, "retired_tier_maps", [])
 if retired:

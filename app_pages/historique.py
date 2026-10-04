@@ -4,7 +4,9 @@ import json
 import pandas as pd
 import streamlit as st
 
-from osuprog import db
+import statistics
+
+from osuprog import db, visuals
 from osuprog.mods import mods_label
 from osuprog.skills import LABELS
 
@@ -16,9 +18,11 @@ SOURCES = {
     "inferred_fail": "Jamais passée",
 }
 
+GRADES = {"XH": "SS (HD)", "X": "SS", "SH": "S (HD)", "S": "S", "A": "A", "B": "B", "C": "C", "D": "D", "F": "F"}
+
 conn = db.connect()
 rows = conn.execute(
-    """SELECT s.ended_at, b.artist, b.title, b.version, s.mods, s.accuracy, s.n_miss, s.passed, s.source,
+    """SELECT s.ended_at, b.artist, b.title, b.version, s.mods, s.accuracy, s.n_miss, s.passed, s.source, s.grade,
               a.stars, a.primary_cat, r.ur,
               (SELECT group_concat(e.category || ' ' || printf('%+.2f', e.delta), ', ')
                FROM rating_events e WHERE e.score_id = s.score_id AND abs(e.delta) >= 0.005) AS effect
@@ -30,9 +34,20 @@ rows = conn.execute(
        ORDER BY s.ended_at DESC"""
 ).fetchall()
 
-st.title("Historique", icon=":material/history:")
-st.markdown(f"Les **{len(rows)} parties** que l'outil a récupérées, en ligne et dans lazer sur ce PC. "
-            "La colonne *Effet* montre de combien chaque partie a fait bouger tes notes.")
+real = [r for r in rows if r["source"] != "inferred_fail"]
+passed = [r for r in real if r["passed"]]
+urs = [r["ur"] for r in real if r["ur"]]
+st.html(visuals.page_header("history", "Historique",
+                            "Toutes tes parties, en ligne et dans lazer sur ce PC, et leur effet sur tes notes", "#66ccff"))
+st.html(visuals.stat_tiles([
+    ("sports_esports", str(len(real)), "parties analysées", "#ff66aa"),
+    ("check_circle", f"{len(passed) / len(real):.0%}" if real else "–", "finies sans fail", "#5cf08f"),
+    ("adjust", f"{statistics.median(r['accuracy'] for r in passed):.1f} %".replace(".", ",") if passed else "–",
+     "précision médiane", "#66ccff"),
+    ("star", f"{max(r['stars'] or 0 for r in passed):.2f}★".replace(".", ",") if passed else "–",
+     "map la plus dure finie", "#ffd23f"),
+    ("graphic_eq", f"{min(urs):.0f}" if urs else "–", "meilleur unstable rate", "#aa88ff"),
+]))
 
 view = st.segmented_control("Afficher", ["Toutes", "Réussies", "Fails"], default="Toutes",
                             label_visibility="collapsed")
@@ -45,6 +60,7 @@ df = pd.DataFrame([
         "Précision": None if r["source"] == "inferred_fail" else r["accuracy"],
         "Miss": None if r["source"] == "inferred_fail" else r["n_miss"],
         "UR": r["ur"],
+        "Rang": GRADES.get(r["grade"], r["grade"] or "-") if r["source"] != "inferred_fail" else "F",
         "Réussie": bool(r["passed"]),
         "Type": LABELS.get(r["primary_cat"], "-"),
         "Effet": (r["effect"] or "").replace(".", ","),

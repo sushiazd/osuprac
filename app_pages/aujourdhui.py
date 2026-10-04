@@ -4,11 +4,11 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
-from osuprog import db, fmt, model, planner, progression
+from osuprog import db, fmt, model, planner, progression, rewards, visuals
 from osuprog.api import MissingCredentials, OsuApi
 from osuprog.rating import load as load_ratings
 from osuprog.skills import LABELS
-from osuprog.ui import SKILL_PLAIN, item_state, map_card, stars
+from osuprog.ui import item_state, map_card, stars
 
 conn = db.connect()
 ratings = load_ratings(conn)
@@ -28,28 +28,6 @@ def api_or_none():
         return None
 
 
-# --- Réglages : durée de la séance et intensité ------------------------------------------------
-cfg = planner.settings(conn)
-with st.popover("Régler ma séance", icon=":material/tune:"):
-    duration_options = ["Auto", "30 min", "45 min", "60 min", "90 min"]
-    current_duration = "Auto" if cfg["auto_minutes"] else f"{cfg['minutes']} min"
-    chosen_duration = st.segmented_control(
-        "Durée", duration_options, default=current_duration if current_duration in duration_options else "Auto",
-        help=f"« Auto » reprend la durée de tes séances habituelles (≈ {planner.typical_session_minutes(conn)} min).")
-    chosen_intensity = st.segmented_control(
-        "Intensité", list(INTENSITY_LABELS.values()), default=INTENSITY_LABELS[cfg["intensity"]],
-        help="\n".join(f"{INTENSITY_LABELS[k]} : {v}" for k, v in INTENSITY_HELP.items()))
-    new_minutes = None if chosen_duration in (None, "Auto") else int(chosen_duration.split()[0])
-    new_intensity = {v: k for k, v in INTENSITY_LABELS.items()}.get(chosen_intensity, cfg["intensity"])
-    if (new_minutes != db.get_meta(conn, "session_minutes")) or new_intensity != cfg["intensity"]:
-        if new_minutes is None:
-            db.del_meta(conn, "session_minutes")
-        else:
-            db.set_meta(conn, "session_minutes", new_minutes)
-        db.set_meta(conn, "intensity", new_intensity)
-        conn.commit()
-        st.rerun()
-
 # Nouveau jour ou nouveaux réglages sans synchro : on prépare quand même la séance depuis le catalogue local.
 planner.build_session(conn, None, ratings, day, log=lambda *_: None)
 plan = conn.execute("SELECT * FROM session_plan WHERE day = ? ORDER BY pos", (day,)).fetchall()
@@ -67,48 +45,62 @@ played = sum(i["state"] != "todo" for i in items)
 goals = [i for i in items if i["role"] in ("Objectif", "Examen")]
 goals_met = sum(i["state"] == "done" for i in goals)
 total_minutes = sum(i["minutes"] or 0 for i in items)
-ranked = sorted(shares, key=shares.get, reverse=True)
-top = [s for s in ranked if s in LABELS][:3]
+top = [s for s in sorted(shares, key=shares.get, reverse=True) if s in LABELS][:3]
 
-st.title("Ton programme du jour", icon=":material/today:")
+# --- Bandeau du joueur -------------------------------------------------------------------------
+user = db.get_meta(conn, "user") or {"username": "Joueur"}
+streak = rewards.streaks(rewards.play_days(conn), day)
+st.html(visuals.player_hero(user, streak, db.get_meta(conn, "clear_level"), exam["rank_c"], exam["target_c"],
+                            played, len(items), goals_met, len(goals), total_minutes))
+
+# --- Barre d'outils : réglages et nouvelles maps ---------------------------------------------------
+with st.container(horizontal=True, vertical_alignment="center"):
+    with st.popover("Régler ma séance", icon=":material/tune:"):
+        duration_options = ["Auto", "30 min", "45 min", "60 min", "90 min"]
+        current_duration = "Auto" if cfg["auto_minutes"] else f"{cfg['minutes']} min"
+        chosen_duration = st.segmented_control(
+            "Durée", duration_options, default=current_duration if current_duration in duration_options else "Auto",
+            help=f"« Auto » reprend la durée de tes séances habituelles (≈ {planner.typical_session_minutes(conn)} min).")
+        chosen_intensity = st.segmented_control(
+            "Intensité", list(INTENSITY_LABELS.values()), default=INTENSITY_LABELS[cfg["intensity"]],
+            help="\n".join(f"{INTENSITY_LABELS[k]} : {v}" for k, v in INTENSITY_HELP.items()))
+        new_minutes = None if chosen_duration in (None, "Auto") else int(chosen_duration.split()[0])
+        new_intensity = {v: k for k, v in INTENSITY_LABELS.items()}.get(chosen_intensity, cfg["intensity"])
+        if (new_minutes != db.get_meta(conn, "session_minutes")) or new_intensity != cfg["intensity"]:
+            if new_minutes is None:
+                db.del_meta(conn, "session_minutes")
+            else:
+                db.set_meta(conn, "session_minutes", new_minutes)
+            db.set_meta(conn, "intensity", new_intensity)
+            conn.commit()
+            st.rerun()
+    if st.button("Changer les maps du jour", icon=":material/shuffle:",
+                 help="Propose d'autres maps avec la même logique. Celles que tu as déjà jouées restent en tête."):
+        planner.reset_session(conn, day)
+        with st.spinner("Choix des maps…"):
+            planner.build_session(conn, api_or_none(), ratings, day, log=lambda *_: None)
+        st.rerun()
+    st.caption(f"Intensité **{INTENSITY_LABELS[cfg['intensity']].lower()}** · "
+               f"{'durée auto' if cfg['auto_minutes'] else 'durée réglée'} ≈ {cfg['minutes']} min")
+
+# --- Focus du jour ---------------------------------------------------------------------------------
 if top:
-    focus = ", ".join(f"**{LABELS[s]}** ({shares[s]:.0%})" for s in top)
-    st.markdown(
-        f"Séance de **≈ {total_minutes:.0f} min** ({len(items)} maps), construite pour te faire progresser le plus vite "
-        f"possible. On travaille surtout {focus}. Joue les maps **dans l'ordre** ; après ta session, clique sur "
-        f"**Synchroniser** : les maps se cochent toutes seules et la suite du programme s'ajuste."
-    )
-
-clear = db.get_meta(conn, "clear_level")
-with st.container(horizontal=True):
-    st.metric("Maps jouées aujourd'hui", f"{played}/{len(items)}", border=True,
-              help="Une map d'objectif compte comme finie quand tu atteins son objectif.")
-    if top:
-        gap = model.skill_gaps({s: ratings[s]["rating"] for s in ratings}, {s: ratings[s]["games"] for s in ratings})[top[0]]
-        certainty = ("Elle est nettement sous tes autres compétences." if gap["significant"] and gap["gap"] < 0 else
-                     "Son retard est dans la marge d'erreur : elle est prioritaire surtout parce qu'elle compte "
-                     "beaucoup dans les maps du niveau suivant, ou parce que sa note est encore incertaine.")
-        st.metric("Priorité n°1", LABELS[top[0]], border=True,
-                  help=f"{LABELS[top[0]]}, c'est {SKILL_PLAIN[top[0]]}. Ta note : {stars(ratings[top[0]]['rating'])}. "
-                       + certainty)
-    if clear:
-        st.metric("Tu réussis jusqu'à", stars(clear["level"]), border=True,
-                  help=f"À {stars(clear['level'])}, tu finis la map (sans fail) une fois sur deux, sur une map à jauge de "
-                       f"vie normale (HP 4). Chaque point de HP en plus vaut environ "
-                       f"{clear.get('hp_k', 0):.2f}★ de difficulté pour la finir. "
-                       f"Ta plus haute map réussie : {stars(clear['highest'])}.")
-    st.metric("Niveau validé", stars(exam["rank_c"] / 100), border=True,
-              help=f"Le niveau où tu fais une bonne précision dans les 6 compétences. "
-                   f"Prochain niveau : {stars(exam['target_c'] / 100)} (onglet Progression).")
-st.progress(played / len(items) if items else 0.0,
-            text=f"{played}/{len(items)} maps jouées · {goals_met}/{len(goals)} objectifs réussis")
+    st.subheader("Focus du jour", icon=":material/center_focus_strong:")
+    st.html(visuals.focus_strip(shares, LABELS, ratings))
+    gap = model.skill_gaps({s: ratings[s]["rating"] for s in ratings}, {s: ratings[s]["games"] for s in ratings})[top[0]]
+    st.caption(
+        f"Priorité n°1 : **{LABELS[top[0]]}**. "
+        + ("Elle est nettement sous tes autres compétences." if gap["significant"] and gap["gap"] < 0 else
+           "Son retard est dans la marge d'erreur : elle passe en tête surtout parce qu'elle compte beaucoup dans "
+           "les maps du niveau suivant, ou parce que sa note est encore incertaine.")
+        + " Joue les maps **dans l'ordre** : avec le suivi en direct, elles se cochent toutes seules.")
 
 
 def card(i, *, highlight=False):
     map_card(conn, i["beatmap_id"], role=i["role"], cat=i["category"], level_c=i["level_c"],
              number=items.index(i) + 1, day=day, highlight=highlight,
              reason=i["reason"], p=i["p"], minutes=i["minutes"],
-             ignorable=i["role"] != "Examen" and i["state"] == "todo")
+             ignorable=i["role"] != "Examen" and i["state"] == "todo", key="today")
 
 
 todo = [i for i in items if i["state"] == "todo"]
@@ -122,20 +114,18 @@ elif current is None:
     st.success("Séance terminée, bravo ! Le temps prévu est écoulé : mieux vaut t'arrêter là que jouer fatigué. "
                "Si tu as encore de l'énergie, tu peux rajouter un peu de temps.",
                icon=":material/emoji_events:")
-    if st.button("Rajouter 15 min", icon=":material/more_time:"):
+    if st.button("Rajouter 15 min", icon=":material/more_time:", type="primary"):
         planner.add_session_time(conn, day, 15)
         with st.spinner("Choix des maps…"):
             planner.build_session(conn, api_or_none(), ratings, day, log=lambda *_: None)
         st.rerun()
 else:
-    st.subheader("À jouer maintenant", icon=":material/play_arrow:")
+    st.subheader("À jouer maintenant", icon=":material/play_circle:")
     card(current, highlight=True)
-    st.caption("« Ouvrir dans osu! » affiche la map dans lazer, qui la télécharge si besoin. Avec le **suivi en "
-               "direct** (barre de gauche), elle se coche toute seule à la fin de ta partie.")
 
 rest = [i for i in todo + retry if i is not current]
 if rest:
-    st.subheader("Ensuite", icon=":material/format_list_numbered:")
+    st.subheader(f"Ensuite · {len(rest)} map{'s' if len(rest) > 1 else ''}", icon=":material/queue_music:")
     for i in rest:
         card(i)
 
@@ -200,10 +190,3 @@ if check["any_rows"]:
                        "compter les réussites après plusieurs essais ferait paraître l'outil plus juste qu'il ne l'est.")
         else:
             st.caption("Pas encore assez de maps jouées sur les jours précédents pour juger les prévisions.")
-
-if st.button("Changer les maps du jour", icon=":material/refresh:",
-             help="Propose d'autres maps avec la même logique. Celles que tu as déjà jouées restent en tête."):
-    planner.reset_session(conn, day)
-    with st.spinner("Choix des maps…"):
-        planner.build_session(conn, api_or_none(), ratings, day, log=lambda *_: None)
-    st.rerun()

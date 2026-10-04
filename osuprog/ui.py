@@ -1,10 +1,11 @@
 """Éléments d'interface partagés par les pages du tableau de bord (textes en clair, cartes de map)."""
 import json
 from datetime import datetime
+from pathlib import Path
 
 import streamlit as st
 
-from . import db, planner, progression
+from . import db, planner, progression, visuals
 from .fmt import num, pct, stars  # noqa: F401  (réexportés pour les pages)
 from .rating import HP_REF
 from .skills import CRITERIA, LABELS, expected_ar, expected_od
@@ -38,6 +39,7 @@ ROLES = {
     "Défi": (":material/bolt:", "yellow"),
     "Révision": (":material/replay:", "blue"),
 }
+THEME_CSS = Path(__file__).with_name("theme.css")
 OLD_ROLE_NAMES = {"Placement": "Test de niveau", "Palier": "Objectif", "Entretien": "Révision"}
 
 
@@ -151,32 +153,32 @@ def record_text(best: dict) -> str:
 
 
 def item_state(conn, role: str, cat: str, beatmap_id: int, day: str) -> tuple[str, str]:
-    """('done' | 'retry' | 'todo', texte du statut en Markdown)."""
+    """('done' | 'retry' | 'todo', statut en clair)."""
     crit = progression.criterion_for(cat)
     today = progression.played_on(conn, beatmap_id, day)
     best = progression.best_result(conn, beatmap_id, crit)
     if role in ("Objectif", "Examen"):
         if best and best["met"]:
-            return "done", f":green[:material/check_circle: **Réussie** · {pct(best['accuracy'])} · {best['misses']} miss]"
+            return "done", f"Réussie · {pct(best['accuracy'])} · {best['misses']} miss"
         if today:
             last = today[0]
             detail = "fail" if not last["passed"] else f"{pct(last['accuracy'])} · {last['n_miss']} miss"
-            return "retry", f":orange[:material/replay: **À retenter** · dernier essai : {detail}]"
+            return "retry", f"À retenter · dernier essai : {detail}"
         if best:
-            return "todo", f":gray[:material/radio_button_unchecked: À jouer · {record_text(best)}]"
-        return "todo", ":gray[:material/radio_button_unchecked: À jouer]"
+            return "todo", f"À jouer · {record_text(best)}"
+        return "todo", "À jouer"
     if today:
         last = today[0]
         detail = "fail" if not last["passed"] else f"{pct(last['accuracy'])} · {last['n_miss']} miss"
-        return "done", f":green[:material/check_circle: **Jouée** · {detail}]"
-    return "todo", ":gray[:material/radio_button_unchecked: À jouer]"
+        return "done", f"Jouée · {detail}"
+    return "todo", "À jouer"
 
 
 def map_card(conn, beatmap_id: int, *, role: str | None = None, cat: str, level_c: int = 0,
              number: int | None = None, day: str | None = None, highlight: bool = False,
              reason: str | None = None, p: float | None = None, minutes: float | None = None,
-             ignorable: bool = False) -> None:
-    """Carte d'une map : badges, titre, pourquoi la jouer, objectif, statut et liens.
+             ignorable: bool = False, key: str = "") -> None:
+    """Carte d'une map (bannière, rôle, étoiles, chances, statut) suivie de ses boutons.
 
     reason, p et minutes viennent du planificateur : pourquoi cette map, tes chances d'atteindre
     l'objectif et le temps estimé. ignorable ajoute « Ne plus me proposer » (programme du jour).
@@ -184,40 +186,23 @@ def map_card(conn, beatmap_id: int, *, role: str | None = None, cat: str, level_
     info = map_info(conn, beatmap_id)
     crit = progression.criterion_for(cat)
     role = OLD_ROLE_NAMES.get(role, role)
-    with st.container(border=True):
-        if highlight and info["set_id"]:
-            st.image(f"https://assets.ppy.sh/beatmaps/{info['set_id']}/covers/slimcover.jpg", width="stretch")
-        with st.container(horizontal=True, vertical_alignment="center", gap="small"):
-            if number is not None:
-                st.badge(f"#{number}", color="primary" if highlight else "gray")
-            if role:
-                icon, color = ROLES.get(role, (None, "gray"))
-                st.badge(role, icon=icon, color=color)
-            st.badge(skill_label(cat), icon=SKILL_ICONS.get(cat), color="gray")
-            st.badge(stars(info["stars"]), icon=":material/star:", color="yellow")
-            if minutes:
-                st.badge(f"≈ {minutes:.0f} min", icon=":material/schedule:", color="gray")
-        left, right = st.columns([3, 2], vertical_alignment="center")
-        with left:
-            st.markdown(f"**[{info['title']}]({info['url']})**  \n{info['artist']} · *{info['version']}*")
-            lead = reason or (role_sentence(role, cat, level_c) if role else "")
-            hp = info["attrs"].get("hp")
-            hp_note = (f"Jauge de vie exigeante (HP {num(hp)}) : elle se finit moins facilement que ses étoiles "
-                       "ne le laissent penser." if hp is not None and hp - HP_REF >= 1.5 else "")
-            st.caption(" ".join(x for x in [lead, why_map(cat, info["attrs"]), hp_note] if x))
-        with right:
-            if role and day:
-                _, status = item_state(conn, role, cat, beatmap_id, day)
-            else:
-                res = progression.best_result(conn, beatmap_id, crit)
-                status = (":green[:material/check_circle: **Réussie**]" if res and res["met"] else
-                          f":gray[{record_text(res)[0].upper()}{record_text(res)[1:]}]" if res else
-                          ":gray[:material/radio_button_unchecked: Pas encore jouée]")
-            st.markdown(status)
-            goal = goal_sentence(role or "Objectif", crit, info["attrs"].get("n_objects"))
-            if p is not None and role not in ("Échauffement", "Test de niveau"):
-                goal += f" Tes chances : environ {round(p * 100)} %."
-            st.caption(goal)
+    lead = reason or (role_sentence(role, cat, level_c) if role else "")
+    hp = info["attrs"].get("hp")
+    hp_note = (f"Jauge de vie exigeante (HP {num(hp)}) : elle se finit moins facilement que ses étoiles "
+               "ne le laissent penser." if hp is not None and hp - HP_REF >= 1.5 else "")
+    if role and day:
+        state, label = item_state(conn, role, cat, beatmap_id, day)
+    else:
+        res = progression.best_result(conn, beatmap_id, crit)
+        state, label = (("done", "Réussie") if res and res["met"] else
+                        ("todo", record_text(res)[0].upper() + record_text(res)[1:]) if res else
+                        ("todo", "Pas encore jouée"))
+    goal = goal_sentence(role or "Objectif", crit, info["attrs"].get("n_objects"))
+    with st.container(key=f"mapcard-{key or number or 'x'}-{beatmap_id}", gap="small"):
+        st.html(visuals.map_card(
+            info, number=number, role=role, cat=cat, skill_label=skill_label(cat),
+            state={"state": state, "label": label}, reason=" ".join(x for x in [lead, why_map(cat, info["attrs"])] if x),
+            goal=goal, p=p, minutes=minutes, hero=highlight, hp_note=hp_note))
         with st.container(horizontal=True, gap="small"):
             st.link_button("Ouvrir dans osu!", game_link(beatmap_id), type="primary" if highlight else "secondary",
                            icon=":material/sports_esports:",
@@ -228,6 +213,20 @@ def map_card(conn, beatmap_id: int, *, role: str | None = None, cat: str, level_
                           icon=":material/block:", on_click=_ignore, args=(beatmap_id, day),
                           help="Elle sort du programme et des paliers (une autre la remplace). "
                                "Annulable dans l'onglet Progression.")
+
+
+def styled_chart(chart):
+    """Graphique Altair aux couleurs du thème : fond transparent, grille discrète, police du thème."""
+    return (chart.configure(background="transparent", font="Outfit")
+            .configure_view(strokeWidth=0)
+            .configure_axis(gridColor="rgba(255,255,255,0.06)", domain=False, tickColor="rgba(255,255,255,0.1)",
+                            labelColor="#a99bbd", titleColor="#a99bbd", labelFontSize=12)
+            .configure_legend(labelColor="#f3eefa", labelFontSize=13, symbolSize=120, symbolStrokeWidth=4))
+
+
+def inject_theme() -> None:
+    """Feuille de style du thème « lazer » (fond animé, cartes, néons) : à appeler une fois par page."""
+    st.html(THEME_CSS)
 
 
 def since(iso: str) -> str:

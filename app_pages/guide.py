@@ -1,7 +1,7 @@
 """Page « Guide » : tout ce que veulent dire les chiffres, en clair."""
 import streamlit as st
 
-from osuprog import db, fmt, planner, progression
+from osuprog import db, fmt, planner, progression, visuals
 from osuprog.rating import load as load_ratings
 from osuprog.skills import CATEGORIES, CRITERIA, LABELS
 from osuprog.ui import SKILL_ICONS, SKILL_PLAIN, criterion_text, stars
@@ -12,8 +12,8 @@ rank = db.get_meta(conn, "rank_c", 0)
 finish, meet = planner.INTENSITY[planner.DEFAULT_INTENSITY]
 max_share = fmt.share(planner.MAX_SHARE)
 
-st.title("Guide", icon=":material/help:")
-st.markdown("Tout ce que veulent dire les chiffres du tableau de bord, et comment t'en servir.")
+st.html(visuals.page_header("help", "Guide", "Tout ce que veulent dire les chiffres, et comment t'en servir",
+                            "#4fdbc6"))
 
 with st.container(border=True):
     st.markdown("#### :material/rocket_launch: Ta routine en 3 étapes")
