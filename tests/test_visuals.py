@@ -3,6 +3,8 @@ from pathlib import Path
 from osuprog import visuals
 
 THEME = Path(__file__).resolve().parent.parent / "osuprog" / "theme.css"
+INFO = {"title": "<img src=x onerror=alert(1)>", "artist": "A & B", "version": "Hard", "stars": 3.2,
+        "set_id": 1, "attrs": {"length_s": 125}}
 
 
 def test_theme_css_has_no_angle_bracket():
@@ -10,30 +12,31 @@ def test_theme_css_has_no_angle_bracket():
     assert "<" not in THEME.read_text(encoding="utf-8")
 
 
-def test_star_colors_follow_the_lazer_spectrum():
-    assert visuals.star_color(2.0) == "#4fffd5"
-    assert visuals.star_color(0.0) == "#4290fb"
-    assert visuals.star_color(12) == "#000000"
-    assert visuals.star_color(2.25) not in ("#4fffd5", "#7cff4f")  # interpolé entre deux points
+def test_default_osu_avatar_becomes_an_initial():
+    guest = {"username": "azdsushi", "avatar_url": "https://osu.ppy.sh/images/layout/avatar-guest@2x.png"}
+    assert not visuals.has_photo(guest)
+    assert "<img" not in visuals.avatar(guest) and ">A<" in visuals.avatar(guest)
+    photo = {"username": "x", "avatar_url": "https://a.ppy.sh/1?123.png"}
+    assert visuals.has_photo(photo) and "<img" in visuals.avatar(photo)
 
 
-def test_html_never_embeds_raw_svg():
+def test_radar_is_an_image_not_inline_svg():
     # Streamlit supprime le SVG intégré : l'hexagone doit passer par une image en data URI.
     skills = ["aim", "speed", "stamina", "accuracy", "reading", "tech"]
-    labels = {s: s.title() for s in skills}
-    out = visuals.radar(skills, labels, {s: 3.0 for s in skills}, {s: 0.2 for s in skills}, clear_level=3.7)
+    out = visuals.radar(skills, {s: s.title() for s in skills}, {s: 3.0 for s in skills})
     assert "<svg" not in out and "data:image/svg+xml;base64," in out
-    assert "<svg" not in visuals.ring(0.4)
 
 
-def test_map_titles_are_escaped():
-    info = {"title": "<img src=x onerror=alert(1)>", "artist": "A & B", "version": "Hard", "stars": 3.2,
-            "set_id": 1, "attrs": {}}
-    out = visuals.map_card(info, number=1, role="Objectif", cat="aim", skill_label="Aim", state=None,
-                           reason="", goal="", p=0.5, minutes=3)
-    assert "<img src=x" not in out and "&lt;img" in out and "A &amp; B" in out
+def test_map_texts_are_escaped():
+    for out in (visuals.map_row(INFO, number=1, role="Objectif", p=0.5, reason='"><b>x'),
+                visuals.now_card(INFO, role="Objectif", skill_label="Aim", goal="80 %", p=0.5, minutes=3)):
+        assert "<img src=x" not in out and "&lt;img" in out and "A &amp; B" in out
+    assert "<b>x" not in visuals.map_row(INFO, number=1, role="Objectif", reason='"><b>x')
 
 
-def test_tier_track_fill_points_at_the_current_tier_even_near_zero():
-    assert "--fill:40%" in visuals.tier_track("aim", "Aim", 300, 25, 1, 3)   # 2 validés, en cours, 3 à venir
-    assert "--fill:0%" in visuals.tier_track("aim", "Aim", 25, 25, 0, 3)     # premier palier
+def test_tier_tracks_share_one_scale():
+    out = visuals.tier_tracks([{"label": "Aim", "current_c": 300, "step_c": 25, "met": 1, "needed": 3},
+                               {"label": "Acc", "current_c": 275, "step_c": 25, "met": 0, "needed": 3}])
+    aim, acc = out.split('class="op-track-name"')[1:]
+    assert aim.count("op-step-current") == 1 and acc.count("op-step-current") == 1
+    assert aim.count("op-step-done") == acc.count("op-step-done") + 1  # Aim a un palier d'avance

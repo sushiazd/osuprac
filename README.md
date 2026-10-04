@@ -28,16 +28,15 @@ Double-clique sur `lancer.bat`, ou lance :
 .\.venv\Scripts\streamlit run app.py
 ```
 
-Le tableau de bord s'ouvre dans le navigateur, avec 6 onglets :
+Le tableau de bord s'ouvre dans le navigateur, avec 5 onglets :
 
-- **Aujourd'hui** : les maps à jouer dans l'ordre. Chacune indique pourquoi la jouer et l'objectif à atteindre. « Ouvrir dans osu! » affiche la map dans lazer (qui la télécharge), « Ne plus me proposer » l'écarte pour de bon.
-- **Mes compétences** : ta note dans chaque compétence avec sa marge d'erreur, son évolution, et ta précision au clic tirée de tes replays.
-- **Progression** : ton niveau validé, ce qu'il manque pour le suivant, et les paliers de chaque compétence.
-- **Succès** : ta série de jours joués, le bilan de la semaine et les succès débloqués.
-- **Historique** : toutes les parties analysées et leur effet sur tes notes.
-- **Guide** : ce que veulent dire tous les chiffres.
+- **Aujourd'hui** : la map à jouer maintenant (bouton « Ouvrir dans osu! »), puis la suite de la séance. Le menu « … » d'une map permet de ne plus la proposer.
+- **Compétences** : tes 6 notes, leur évolution et ta précision au clic (d'après tes replays).
+- **Progression** : ton niveau, tes paliers et tes succès.
+- **Historique** : toutes tes parties et leur effet sur tes notes.
+- **Guide** : toutes les explications.
 
-L'interface reprend l'esprit d'osu! lazer : thème sombre, couleurs officielles des étoiles, bannières des maps, hexagone des compétences, passe de paliers et badges de succès. Couleurs et polices dans `.streamlit/config.toml`, effets dans `osuprog/theme.css` (aucun caractère « < » dans ce fichier : le filtre HTML de Streamlit supprimerait toute la feuille), composants dans `osuprog/visuals.py`. Les animations se coupent si Windows demande de réduire les animations. Avec le **suivi en direct** (activé par défaut dans la barre de gauche), le tableau de bord se synchronise tout seul à la fin de chaque partie dans lazer : la map se coche et la suivante s'affiche. Sinon, clique sur **Synchroniser** après ta session. L'API ne garde tes parties récentes (fails compris) que 24 h : synchronise au moins une fois par jour.
+Interface sobre : thème sombre, une seule couleur d'accent. Couleurs et police dans `.streamlit/config.toml`, styles dans `osuprog/theme.css` (aucun caractère « < » dans ce fichier : le filtre HTML de Streamlit supprimerait toute la feuille), composants dans `osuprog/visuals.py`. Ta photo de profil osu! s'affiche si tu en as mis une sur ton profil ; sinon, l'initiale de ton pseudo. Avec le **suivi en direct** (activé par défaut dans la barre de gauche), le tableau de bord se synchronise tout seul à la fin de chaque partie dans lazer : la map se coche et la suivante s'affiche. Sinon, clique sur **Synchroniser** après ta session. L'API ne garde tes parties récentes (fails compris) que 24 h : synchronise au moins une fois par jour.
 
 La synchronisation marche aussi sans l'interface :
 

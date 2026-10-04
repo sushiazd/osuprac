@@ -1,36 +1,40 @@
-# Thème « lazer » : sombre, rose osu!, inspiré de l'interface d'osu! lazer.
-# Les effets (fond animé, cartes, néons) sont dans osuprog/theme.css.
+# Thème sobre : fond neutre, une seule couleur d'accent (le rose d'osu!), police Inter.
+# Les quelques styles en plus sont dans osuprog/theme.css.
 
 [theme]
 base = "dark"
-primaryColor = "#e8448f"
-backgroundColor = "#0e0a15"
-secondaryBackgroundColor = "#1a1324"
-textColor = "#f3eefa"
-linkColor = "#ff7ab8"
-borderColor = "#2c2340"
+primaryColor = "#ff5fa2"
+backgroundColor = "#111114"
+secondaryBackgroundColor = "#1a1a1f"
+textColor = "#ececf1"
+linkColor = "#ff8cbd"
+borderColor = "#27272e"
 showWidgetBorder = true
-showSidebarBorder = false
-font = "Outfit:https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap"
-headingFont = "'Exo 2':https://fonts.googleapis.com/css2?family=Exo+2:ital,wght@0,600;0,700;0,800;0,900;1,800;1,900&display=swap"
-codeFont = "'JetBrains Mono':https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap"
-headingFontWeights = [900, 800, 800, 700, 700, 600]
-headingFontSizes = ["40px", "28px", "22px", "18px", "15px", "13px"]
-baseRadius = "14px"
-buttonRadius = "full"
+showSidebarBorder = true
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+codeFont = "'JetBrains Mono':https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap"
+baseFontSize = 15
+headingFontWeights = [600, 600, 600, 600, 600, 600]
+headingFontSizes = ["28px", "19px", "16px", "15px", "14px", "13px"]
+baseRadius = "12px"
+buttonRadius = "10px"
 linkUnderline = false
-dataframeHeaderBackgroundColor = "#1f1730"
-dataframeBorderColor = "#2c2340"
-redColor = "#ff4f6f"
-orangeColor = "#ffaa33"
-yellowColor = "#ffd23f"
-greenColor = "#5cf08f"
-blueColor = "#66ccff"
-violetColor = "#aa88ff"
-grayColor = "#8d80a3"
-chartCategoricalColors = ["#ff66aa", "#66ccff", "#ffaa33", "#5cf08f", "#aa88ff", "#4fdbc6"]
+dataframeHeaderBackgroundColor = "#17171c"
+dataframeBorderColor = "#27272e"
+redColor = "#f2626f"
+greenColor = "#45c98b"
+orangeColor = "#e8a33d"
+yellowColor = "#e8c547"
+blueColor = "#6aa8ff"
+violetColor = "#a08cff"
+grayColor = "#8b8b96"
+chartCategoricalColors = ["#ff5fa2", "#8b8b96"]
 
 [theme.sidebar]
-backgroundColor = "#0a0710"
-secondaryBackgroundColor = "#17111f"
-borderColor = "#241c33"
+backgroundColor = "#0d0d10"
+secondaryBackgroundColor = "#17171c"
+borderColor = "#1f1f25"
+
+[client]
+# Cache le bouton « Deploy » et les menus de développement.
+toolbarMode = "minimal"

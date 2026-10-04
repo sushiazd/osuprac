@@ -1,89 +1,83 @@
 """Page « Historique » : toutes les parties analysées."""
 import json
+import statistics
 
 import pandas as pd
 import streamlit as st
 
-import statistics
-
-from osuprog import db, visuals
+from osuprog import db
 from osuprog.mods import mods_label
 from osuprog.skills import LABELS
 
-SOURCES = {
-    "best": "Top play",
-    "recent": "Récente",
-    "history": "En ligne",
-    "lazer_local": "Lazer (ce PC)",
-    "inferred_fail": "Jamais passée",
-}
+GRADES = {"XH": "SS", "X": "SS", "SH": "S", "S": "S", "A": "A", "B": "B", "C": "C", "D": "D", "F": "F"}
 
-GRADES = {"XH": "SS (HD)", "X": "SS", "SH": "S (HD)", "S": "S", "A": "A", "B": "B", "C": "C", "D": "D", "F": "F"}
+
+
+def effect_text(effect: str | None) -> str:
+    """« accuracy +0.02, aim -0.01 » -> « Accuracy +0,02 · Aim -0,01 »."""
+    if not effect:
+        return ""
+    parts = []
+    for item in effect.split(", "):
+        cat, _, delta = item.partition(" ")
+        parts.append(f"{LABELS.get(cat, cat)} {delta.replace('.', ',')}")
+    return " · ".join(parts)
+
 
 conn = db.connect()
 rows = conn.execute(
-    """SELECT s.ended_at, b.artist, b.title, b.version, s.mods, s.accuracy, s.n_miss, s.passed, s.source, s.grade,
-              a.stars, a.primary_cat, r.ur,
+    """SELECT s.ended_at, b.title, b.version, s.mods, s.accuracy, s.n_miss, s.passed, s.source, s.grade,
+              a.stars, r.ur,
               (SELECT group_concat(e.category || ' ' || printf('%+.2f', e.delta), ', ')
                FROM rating_events e WHERE e.score_id = s.score_id AND abs(e.delta) >= 0.005) AS effect
        FROM scores s
        LEFT JOIN beatmaps b ON b.beatmap_id = s.beatmap_id
        LEFT JOIN map_attrs a ON a.beatmap_id = s.beatmap_id AND a.mods_key = s.mods_key
        LEFT JOIN replay_stats r ON r.score_id = s.score_id
-       WHERE s.countable = 1
+       WHERE s.countable = 1 AND s.source != 'inferred_fail'
        ORDER BY s.ended_at DESC"""
 ).fetchall()
+passed = [r for r in rows if r["passed"]]
 
-real = [r for r in rows if r["source"] != "inferred_fail"]
-passed = [r for r in real if r["passed"]]
-urs = [r["ur"] for r in real if r["ur"]]
-st.html(visuals.page_header("history", "Historique",
-                            "Toutes tes parties, en ligne et dans lazer sur ce PC, et leur effet sur tes notes", "#66ccff"))
-st.html(visuals.stat_tiles([
-    ("sports_esports", str(len(real)), "parties analysées", "#ff66aa"),
-    ("check_circle", f"{len(passed) / len(real):.0%}" if real else "–", "finies sans fail", "#5cf08f"),
-    ("adjust", f"{statistics.median(r['accuracy'] for r in passed):.1f} %".replace(".", ",") if passed else "–",
-     "précision médiane", "#66ccff"),
-    ("star", f"{max(r['stars'] or 0 for r in passed):.2f}★".replace(".", ",") if passed else "–",
-     "map la plus dure finie", "#ffd23f"),
-    ("graphic_eq", f"{min(urs):.0f}" if urs else "–", "meilleur unstable rate", "#aa88ff"),
-]))
+st.title("Historique")
+with st.container(horizontal=True):
+    st.metric("Parties", len(rows), border=True)
+    st.metric("Finies", f"{len(passed) / len(rows):.0%}" if rows else "–", border=True)
+    st.metric("Précision médiane", f"{statistics.median(r['accuracy'] for r in passed):.1f} %".replace(".", ",")
+              if passed else "–", border=True)
 
-view = st.segmented_control("Afficher", ["Toutes", "Réussies", "Fails"], default="Toutes",
+view = st.segmented_control("Afficher", ["Toutes", "Finies", "Fails"], default="Toutes",
                             label_visibility="collapsed")
 df = pd.DataFrame([
     {
-        "Date": None if r["source"] == "inferred_fail" else pd.to_datetime(r["ended_at"], utc=True).tz_convert(None),
-        "Map": f"{r['artist']} - {r['title']} [{r['version']}]",
+        "Date": pd.to_datetime(r["ended_at"], utc=True).tz_convert(None),
+        "Map": f"{r['title']} [{r['version']}]",
+        "★": r["stars"],
+        "Précision": r["accuracy"],
+        "Miss": r["n_miss"],
+        "Rang": GRADES.get(r["grade"], r["grade"] or "–") if r["passed"] else "F",
         "Mods": mods_label(json.loads(r["mods"])),
-        "Étoiles": r["stars"],
-        "Précision": None if r["source"] == "inferred_fail" else r["accuracy"],
-        "Miss": None if r["source"] == "inferred_fail" else r["n_miss"],
-        "UR": r["ur"],
-        "Rang": GRADES.get(r["grade"], r["grade"] or "-") if r["source"] != "inferred_fail" else "F",
-        "Réussie": bool(r["passed"]),
-        "Type": LABELS.get(r["primary_cat"], "-"),
-        "Effet": (r["effect"] or "").replace(".", ","),
-        "Source": SOURCES.get(r["source"], r["source"]),
+        "UR": f"{r['ur']:.0f}" if r["ur"] else "",
+        "Effet": effect_text(r["effect"]),
+        "passed": bool(r["passed"]),
     }
     for r in rows
 ])
-if view == "Réussies":
-    df = df[df["Réussie"]]
+for col in ("★", "Précision", "Miss"):  # vides plutôt que « None » quand la valeur manque
+    df[col] = pd.to_numeric(df[col], errors="coerce")
+if view == "Finies":
+    df = df[df["passed"]]
 elif view == "Fails":
-    df = df[~df["Réussie"]]
+    df = df[~df["passed"]]
 
 st.dataframe(
-    df, hide_index=True, width="stretch", height=560,
+    df.drop(columns="passed"), hide_index=True, width="stretch", height=600,
     column_config={
-        "Date": st.column_config.DatetimeColumn(format="DD/MM/YY HH:mm"),
+        "Date": st.column_config.DatetimeColumn(format="DD/MM HH:mm"),
         "Map": st.column_config.TextColumn(width="large"),
-        "Étoiles": st.column_config.NumberColumn(format="%.2f ★"),
-        "Précision": st.column_config.ProgressColumn(format="%.2f %%", min_value=0, max_value=100),
-        "Réussie": st.column_config.CheckboxColumn(),
-        "Effet": st.column_config.TextColumn(help="Variation de tes notes due à cette partie"),
-        "UR": st.column_config.NumberColumn(format="%.0f", help="Unstable rate, d'après le replay de lazer : "
-                                            "plus c'est bas, plus tes clics sont réguliers"),
+        "★": st.column_config.NumberColumn(format="%.2f"),
+        "Précision": st.column_config.NumberColumn(format="%.2f %%"),
+        "UR": st.column_config.TextColumn(help="Unstable rate (d'après le replay de lazer)"),
+        "Effet": st.column_config.TextColumn(help="Comment cette partie a fait bouger tes notes"),
     },
 )
-st.caption("« Jamais passée » : une map classée jouée au moins 3 fois sans aucun score enregistré par osu!.")
