@@ -142,6 +142,7 @@ ADDED_COLUMNS = [
     ("session_plan", "p", "REAL"),
     ("session_plan", "minutes", "REAL"),
     ("session_plan", "share", "REAL"),
+    ("ratings", "level", "REAL"),  # note au critère commun (rating.recompute) : pour comparer les compétences
     ("scores", "stats", "TEXT"),  # statistiques complètes au format API (fins de sliders...), pour le calcul des pp
     # Partie quittée volontairement (Échap, relance) : osu! l'enregistre comme un fail, mais on ne meurt pas avec
     # si peu de miss. Elle ne compte ni dans les notes, ni dans les prévisions, ni dans la séance du jour.

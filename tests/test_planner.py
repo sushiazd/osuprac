@@ -86,3 +86,22 @@ def test_challenge_shows_its_chance_to_finish_the_map():
     challenge = next(i for i in items if i.role == "Défi")
     c = next(c for c in candidates() if c.beatmap_id == challenge.beatmap_id)
     assert abs(challenge.p - model.finish_prob(c.stars, c.hp, 3.5, 0.55)) < 1e-9
+
+
+def test_about_a_third_of_the_session_is_played_near_your_limit():
+    from osuprog import model
+    items, _ = plan(context(), candidates())
+    climb = [i for i in items if i.role == "Montée"]
+    assert climb and 0.25 * 45 <= sum(i.minutes for i in climb) <= 0.5 * 45
+    for i in climb:  # chances de FINIR la map, près de la cible
+        c = next(c for c in candidates() if c.beatmap_id == i.beatmap_id)
+        assert abs(i.p - model.finish_prob(c.stars, c.hp, 3.5, 0.55)) < 1e-9 and 0.35 <= i.p <= 0.85
+
+
+def test_a_stricter_objective_is_not_mistaken_for_a_weak_skill():
+    # Accuracy a une note basse parce que son objectif est plus exigeant, mais à critère égal elle est au niveau.
+    ratings = {s: 3.0 for s in CATEGORIES} | {"accuracy": 2.5}
+    shares_raw, _ = skill_shares(context(ratings=ratings), candidates())
+    shares_fair, _ = skill_shares(context(ratings=ratings, levels={s: 3.0 for s in CATEGORIES}), candidates())
+    assert shares_fair["accuracy"] < shares_raw["accuracy"]
+    assert max(shares_fair.values()) - min(shares_fair.values()) < 0.1

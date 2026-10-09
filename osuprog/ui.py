@@ -88,6 +88,7 @@ def role_sentence(role: str, cat: str, level_c: int) -> str:
         "Objectif": f"Une des 3 maps de ton palier {label} {stars(level_c / 100)}.",
         "Entraînement": f"Travail ciblé en {label}.",
         "Examen": f"Examen du niveau {stars(level_c / 100)}.",
+        "Montée": f"Près de ta limite : c'est là que ton niveau et tes pp montent ({label}).",
         "Défi": "Au-dessus de ton niveau : la rater est normal.",
         "Révision": f"Pour garder ton niveau en {label}.",
     }.get(role, "")
@@ -98,7 +99,7 @@ def goal_sentence(role: str, crit, n_objects: int | None = None) -> str:
         return "Aucun, juste te chauffer."
     if role == "Test de niveau":
         return "Joue-la normalement."
-    if role == "Défi":
+    if role in ("Défi", "Montée"):
         return f"La finir. Bonus : {short_goal(crit, n_objects)}."
     return short_goal(crit, n_objects) + "."
 

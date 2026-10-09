@@ -10,7 +10,7 @@ from collections import defaultdict
 
 from . import db
 from .mods import EASY_MODS
-from .skills import CATEGORIES, CRITERIA, outcome
+from .skills import CATEGORIES, COMMON_CRITERION, CRITERIA, outcome
 
 # Raideur de la courbe « étoiles → chances de réussir » : 0,5★ au-dessus de ta note ≈ 27 % de chances.
 # Calibré en rejouant 346 parties réelles (prédiction faite avant chaque résultat) : 0,30 rendait le
@@ -65,6 +65,10 @@ def recompute(conn) -> dict[str, dict]:
     tracking_start = db.get_meta(conn, "tracking_start", "")
     start = seed_rating(rows)
     ratings = {c: start for c in CATEGORIES}
+    # Même calcul avec un critère identique pour toutes les compétences : sert à les COMPARER. Les objectifs n'ont pas
+    # tous la même exigence (85 % de précision en Accuracy, 80 % ailleurs) : comparées telles quelles, la compétence
+    # la plus exigeante paraît toujours la plus faible.
+    levels = {c: start for c in CATEGORIES}
     games = {c: 0.0 for c in CATEGORIES}
     attempts = defaultdict(int)
     events = []
@@ -84,6 +88,8 @@ def recompute(conn) -> dict[str, dict]:
             k = K_MIN + (K_MAX - K_MIN) / (1 + games[cat] / K_HALF_GAMES)
             delta = k * w * era * repeat * (o - p)
             ratings[cat] += delta
+            o_common = outcome(bool(r["passed"]), r["accuracy"], r["n_miss"], n_objects, COMMON_CRITERION)
+            levels[cat] += k * w * era * repeat * (o_common - expected(levels[cat], stars))
             games[cat] += w * era * repeat
             events.append((r["score_id"], cat, w, round(p, 3), o, round(delta, 4), round(ratings[cat], 3)))
 
@@ -91,16 +97,17 @@ def recompute(conn) -> dict[str, dict]:
     conn.executemany("INSERT INTO rating_events VALUES (?, ?, ?, ?, ?, ?, ?)", events)
     conn.execute("DELETE FROM ratings")
     conn.executemany(
-        "INSERT INTO ratings VALUES (?, ?, ?)",
-        [(c, round(ratings[c], 3), round(games[c], 2)) for c in CATEGORIES],
+        "INSERT INTO ratings (category, rating, games, level) VALUES (?, ?, ?, ?)",
+        [(c, round(ratings[c], 3), round(games[c], 2), round(levels[c], 3)) for c in CATEGORIES],
     )
     conn.commit()
     return load(conn)
 
 
 def load(conn) -> dict[str, dict]:
-    rows = conn.execute("SELECT category, rating, games FROM ratings").fetchall()
-    return {r["category"]: {"rating": r["rating"], "games": r["games"]} for r in rows}
+    rows = conn.execute("SELECT category, rating, games, level FROM ratings").fetchall()
+    return {r["category"]: {"rating": r["rating"], "games": r["games"],
+                            "level": r["level"] if r["level"] is not None else r["rating"]} for r in rows}
 
 
 def fit_clear_level(points: list[tuple]) -> dict | None:

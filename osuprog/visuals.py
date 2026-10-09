@@ -88,7 +88,7 @@ def now_card(info: dict, *, role: str | None, skill_label: str, goal: str, p: fl
     if minutes:
         meta.append(f"<span>≈ {minutes:.0f} min</span>")
     if p is not None and role not in ("Échauffement", "Test de niveau"):
-        meta.append(f"<span>{round(p * 100)} % de chances {'de la finir' if role == 'Défi' else 'de réussir'}</span>")
+        meta.append(f"<span>{round(p * 100)} % de chances {'de la finir' if role in ('Défi', 'Montée') else 'de réussir'}</span>")
     if fc_pp:
         meta.append(f"<span>≈ {fc_pp:.0f} pp en FC</span>")
     cover_html = f'<div class="op-now-cover" style="background-image:url(\'{cover}\')"></div>' if cover else ""
@@ -112,7 +112,7 @@ def map_row(info: dict, *, number: int | None, role: str | None, state: str = "t
     thumb = cover_url(info.get("set_id"), "list")
     thumb_html = (f'<img class="op-thumb" src="{thumb}" alt="">' if thumb else '<div class="op-thumb"></div>')
     status = {"done": icon("check_circle", "op-check"), "retry": icon("replay", "op-retry")}.get(state, "")
-    chance = (f'<span title="Chances {"de la finir" if role == "Défi" else "de réussir l&#39;objectif"}">'
+    chance = (f'<span title="Chances {"de la finir" if role in ("Défi", "Montée") else "de réussir l&#39;objectif"}">'
               f"{round(p * 100)} %</span>" if p is not None and state == "todo"
               and role not in ("Échauffement", "Test de niveau") else "")
     num_html = f'<div class="op-num">{number}</div>' if number is not None else ""

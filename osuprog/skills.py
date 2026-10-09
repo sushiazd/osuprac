@@ -57,6 +57,8 @@ CRITERIA = {
     "tech": Criterion(75, 2.5),
 }
 EXAM_CRITERION = Criterion(80, 2)
+# Critère commun à toutes les compétences, pour les comparer entre elles (voir rating.recompute).
+COMMON_CRITERION = Criterion(80, 2)
 
 
 def map_attributes(beatmap_id: int, mods: list[dict]) -> dict:

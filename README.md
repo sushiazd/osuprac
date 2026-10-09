@@ -84,7 +84,8 @@ La première synchronisation prend quelques secondes (un peu plus si tu as joué
 - **Jauge de vie (HP) :** les étoiles l'ignorent. Sur tes parties, l'outil mesure combien d'étoiles « vaut » un point de HP pour finir une map (et ≈ 0,15★ pour l'objectif de précision) : il évite les maps que tu finis presque jamais et remplace une map de palier bloquante (jamais finie en 3 essais si c'est très improbable, ou 8 essais sans l'objectif).
 - **Variété et espacement :** chaque map chargée sur une compétence vaut moins pour la suivante ; les compétences très sollicitées ces 48 dernières heures sont ménagées.
 - **Répétition ciblée :** une map ratée récemment revient (jusqu'à 8 essais), une map déjà réussie est écartée quelques jours.
-- **Structure :** échauffement facile, travail ciblé (du plus accessible au plus dur), défi juste au-dessus de ton niveau de réussite, révision d'une compétence peu travaillée.
+- **Structure :** échauffement facile, travail ciblé (du plus accessible au plus dur), **montée** (environ un tiers de la séance, des maps près de ton niveau de passe que tu finis environ 6 fois sur 10, de préférence celles qui rapportent des pp), défi juste au-dessus de ton niveau de réussite, révision d'une compétence peu travaillée. Les objectifs de précision imposent des maps bien plus faciles que celles que tu finis : sans la montée, on ne s'entraînait jamais près de sa limite.
+- **Compétences comparées à critère égal :** l'objectif Accuracy (85 % de précision) est plus exigeant que les autres (80 %), sa note est donc naturellement plus basse. Pour répartir le temps et repérer points forts et faibles, chaque compétence est aussi notée avec un critère commun (80 % de précision, 2 % de miss).
 
 Chaque map indique pourquoi elle est là, tes chances d'atteindre l'objectif et sa durée estimée. Après chaque synchronisation, le reste de la séance est recalculé avec tes nouvelles notes (les maps déjà jouées restent en tête).
 

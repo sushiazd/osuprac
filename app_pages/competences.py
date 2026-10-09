@@ -14,7 +14,9 @@ conn = db.connect()
 ratings = load_ratings(conn)
 values = {c: ratings[c]["rating"] for c in CATEGORIES}
 games = {c: ratings[c]["games"] for c in CATEGORIES}
-gaps = model.skill_gaps(values, games)
+# Points forts et faibles comparés à critère égal : l'objectif Accuracy (85 %) est plus exigeant que les autres (80 %),
+# sa note est donc naturellement plus basse sans que ce soit un point faible.
+gaps = model.skill_gaps({c: ratings[c]["level"] for c in CATEGORIES}, games)
 plan_shares = (db.get_meta(conn, "plan_summary") or {}).get("shares") or {}
 priority = max(plan_shares, key=plan_shares.get) if plan_shares else None
 

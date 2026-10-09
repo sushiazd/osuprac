@@ -12,7 +12,10 @@ Principes (tirés de la recherche sur l'apprentissage et de la façon dont osu! 
    heures sont ménagées (pratique espacée).
 4. Rejouer les maps ratées récemment (répétition ciblée), éviter celles déjà réussies
    et celles sur lesquelles on s'acharne sans progrès.
-5. Séance structurée dans un budget de temps : échauffement, travail ciblé, défi, révision.
+5. Séance structurée dans un budget de temps : échauffement, travail ciblé, montée, défi, révision.
+6. Pousser sa limite : environ un tiers de la séance se joue près de ton niveau de passe (« Montée »). Les objectifs
+   de précision imposent des maps bien plus faciles que celles que tu finis ; sans ce bloc, on ne s'entraînait
+   jamais là où le niveau (et les pp) progressent.
 
 Le cœur (`plan`) est une fonction pure : il ne touche pas à la base et peut être simulé.
 """
@@ -24,12 +27,12 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from . import db, fmt, model, progression
+from . import db, fmt, model, pp, progression
 from .model import CALIBRATED_GAMES, DEFAULT_CLEAR_SCALE
 from .rating import HP_REF, effective_stars
 from .skills import CATEGORIES, CRITERIA, LABELS
 
-PLAN_FORMAT = 18               # à incrémenter quand l'algorithme change
+PLAN_FORMAT = 19               # à incrémenter quand l'algorithme change
 # intensité -> (chances de FINIR la map visées, chances d'atteindre l'OBJECTIF de précision visées)
 # « équilibré » est le réglage le plus robuste en simulation (meilleure moyenne et meilleur pire cas
 # sous quatre hypothèses d'apprentissage, voir tools/simulate_training.py).
@@ -45,6 +48,9 @@ TIER_BONUS = 1.3              # une map de palier fait aussi avancer le débloca
 MAX_TESTS = 2
 MAX_PER_CREATOR = 2
 PLAN_FINISH_FLOOR = 0.25      # on ne propose pas de map que tu as très peu de chances de finir
+CLIMB_SHARE = 0.35            # part de la séance jouée près de ta limite (« Montée »)
+CLIMB_FINISH, CLIMB_WIDTH = 0.62, 0.15  # … sur des maps que tu finis environ 6 fois sur 10
+CLIMB_MAX_ABOVE = 0.35        # … sans dépasser ton niveau de passe de plus de 0,35★
 DRIFT_TOLERANCE = 0.30        # une map d'entraînement prévue est remplacée si ses chances s'écartent de plus de 30 pts
 WARM_MIN_P, WARM_MIN_FINISH = 0.65, 0.85  # échauffement : objectif probable, map finie presque à coup sûr
 CAND_BELOW, CAND_ABOVE = 2.0, 1.5  # maps candidates : de 2★ sous ta compétence la plus faible à 1,5★ au-dessus de la plus forte
@@ -63,6 +69,7 @@ class Cand:
     playcount: int = 0
     favourites: int = 0
     hp: float = HP_REF
+    pp_fc: tuple | None = None   # pp d'un full combo aux précisions de ppcalc.FC_ACCURACIES (maps qui rapportent des pp)
 
 
 @dataclass
@@ -95,6 +102,9 @@ class Context:
     exclude: set = field(default_factory=set)      # maps à ne pas proposer (déjà dans la séance)
     warmed_up: bool = False                        # déjà joué aujourd'hui : pas de nouvel échauffement
     done_roles: set = field(default_factory=set)   # rôles des maps du programme déjà jouées aujourd'hui
+    levels: dict | None = None    # notes au critère commun : pour comparer les compétences (défaut : ratings)
+    typical_acc: float = 0.9      # ta précision habituelle (pp d'une map en full combo)
+    top_pp: float = 0.0           # ta meilleure partie en pp
 
 
 @dataclass
@@ -110,6 +120,12 @@ class Item:
 
 
 # --- Briques ---------------------------------------------------------------------------------
+
+FINISH_ROLES = ("Défi", "Montée")  # leur but est de finir la map : on affiche et on vise leurs chances de la finir
+
+
+def fc_pp_at(values, accuracy: float) -> float:
+    return pp.fc_pp({"pp_fc": values}, accuracy) or 0.0
 
 def noise(seed: str, key) -> float:
     """Bruit déterministe dans [-1, 1] : même jour = même séance, jours différents = variété."""
@@ -140,12 +156,13 @@ def skill_shares(ctx: Context, cands: list[Cand]) -> tuple[dict, dict]:
     imp = {s: max(0.02, v / total) for s, v in imp.items()}
     total = sum(imp.values())
     imp = {s: v / total for s, v in imp.items()}
-    mean_rating = sum(imp[s] * ctx.ratings[s] for s in CATEGORIES)
+    levels = ctx.levels or ctx.ratings
+    mean_rating = sum(imp[s] * levels[s] for s in CATEGORIES)
 
     raw, parts = {}, {}
     for s in CATEGORIES:
         sd = model.skill_sd(ctx.games[s])
-        gap = mean_rating - ctx.ratings[s]                       # > 0 : en retard sur tes autres compétences
+        gap = mean_rating - levels[s]                            # > 0 : en retard sur tes autres compétences
         delta = max(-1.5, min(2.5, gap / 0.4))
         damp = 1 / (1 + ctx.load2d.get(s, 0.0) / 25)             # ménage ce qui vient d'être très sollicité
         raw[s] = imp[s] * math.exp(delta) * (1 + 0.8 * sd / 0.3) * damp
@@ -169,6 +186,8 @@ def attempts_expected(role: str, p: float) -> float:
         return 1.0
     if role == "Défi":
         return 2.5
+    if role == "Montée":
+        return 1.8
     if role == "Révision":
         return 1.3
     if role == "Test de niveau":
@@ -185,6 +204,9 @@ def explain(role: str, skill: str, ctx: Context, shares: dict, parts: dict, h: H
                 "joue-la normalement.")
     if role == "Défi":
         return "Juste au-dessus du niveau où tu finis une map sur deux : elle teste tes limites."
+    if role == "Montée":
+        return (f"Près de ta limite ({p:.0%} de chances de la finir) : c'est là que ton niveau de passe et tes pp "
+                f"montent. Travaille surtout {label}.")
     if role == "Révision":
         return (f"{label} est la compétence que tu as le moins travaillée ces 7 derniers jours par rapport à son "
                 "importance : on l'entretient avant qu'elle ne retombe.")
@@ -241,7 +263,7 @@ def plan(ctx: Context, cands: list[Cand]) -> tuple[list[Item], dict]:
 
     def take(c: Cand, role: str, skill: str, level_c: int | None = None) -> Item:
         # Le défi a pour but de FINIR la map : on affiche donc ses chances de la finir, pas celles de l'objectif.
-        p = p_finish_of(c) if role == "Défi" and ctx.clear_level is not None else p_cache[c.beatmap_id]
+        p = p_finish_of(c) if role in FINISH_ROLES and ctx.clear_level is not None else p_cache[c.beatmap_id]
         tier = ctx.tier_open.get(c.beatmap_id)
         item = Item(
             role=role, category=skill,
@@ -265,7 +287,8 @@ def plan(ctx: Context, cands: list[Cand]) -> tuple[list[Item], dict]:
 
     B = ctx.budget_min
     warm_budget = 0.0 if ctx.warmed_up else 0.08 * B
-    stretch_budget = 0.0 if "Défi" in ctx.done_roles else 0.17 * B
+    climb_budget = CLIMB_SHARE * B if ctx.clear_level is not None else 0.0
+    stretch_budget = 0.0 if "Défi" in ctx.done_roles else 0.12 * B
     review_budget = 0.0 if "Révision" in ctx.done_roles else 0.12 * B
 
     # 0. Examen : s'il est débloqué, c'est la priorité.
@@ -291,7 +314,8 @@ def plan(ctx: Context, cands: list[Cand]) -> tuple[list[Item], dict]:
         test_minutes += it.minutes
 
     # 2. Travail ciblé (glouton avec rendements décroissants) sur le temps restant.
-    main_budget = max(min(8.0, B), B - warm_budget - stretch_budget - review_budget - exam_minutes - test_minutes)
+    main_budget = max(min(8.0, B), B - warm_budget - climb_budget - stretch_budget - review_budget - exam_minutes
+                      - test_minutes)
 
     def learn(c: Cand) -> float:
         """Difficulté productive : une map que tu finis la plupart du temps et dont l'objectif est jouable."""
@@ -328,7 +352,28 @@ def plan(ctx: Context, cands: list[Cand]) -> tuple[list[Item], dict]:
     work_minutes = lambda: sum(i.minutes for i in chosen if i.role in ("Entraînement", "Objectif"))
     add_main(main_budget, work_minutes)
 
-    # 3. Défi : juste au-dessus du niveau où tu finis une map sur deux.
+    # 3. Montée : près de ta limite, des maps que tu finis environ 6 fois sur 10, de préférence qui rapportent des pp.
+    def climb_value(c: Cand) -> float:
+        skills = sum(shares.get(s, 0) * w * DIMINISH ** load[s] for s, w in c.weights.items())
+        gain = 1.0
+        if c.pp_fc and ctx.top_pp > 0:  # une map dont le full combo entrerait haut dans ton top vaut plus
+            gain = min(1.5, max(0.7, fc_pp_at(c.pp_fc, ctx.typical_acc) / ctx.top_pp))
+        minutes = model.minutes_for(c.length_s, attempts_expected("Montée", 0.6))
+        return skills * model.bump(p_finish_of(c), CLIMB_FINISH, CLIMB_WIDTH) * base(c) * gain / math.sqrt(minutes)
+
+    climb_minutes = lambda: sum(i.minutes for i in chosen if i.role == "Montée")  # noqa: E731
+    if climb_budget:
+        # Plafond d'étoiles : une map très au-dessus de ton niveau mais « facile à finir » grâce à une jauge de vie
+        # très basse n'apprend rien de plus, on la joue sans rien contrôler.
+        pool = [c for c in cands if c.length_s <= 300 and 0.35 <= p_finish_of(c) <= 0.85
+                and c.stars <= ctx.clear_level + CLIMB_MAX_ABOVE]
+        while climb_minutes() < climb_budget - 1.5:
+            ranked = sorted((c for c in pool if usable(c)), key=climb_value, reverse=True)
+            if not ranked:
+                break
+            take(ranked[0], "Montée", top_skill(ranked[0]))
+
+    # 4. Défi : juste au-dessus du niveau où tu finis une map sur deux.
     clear_level = ctx.clear_level if ctx.clear_level is not None else ctx.level
     def stretch_value(c: Cand) -> float:
         p_clear = p_finish_of(c) if ctx.clear_level is not None else model.sigmoid((clear_level - c.stars) / ctx.clear_scale)
@@ -339,7 +384,7 @@ def plan(ctx: Context, cands: list[Cand]) -> tuple[list[Item], dict]:
         c = max(pool, key=stretch_value)
         take(c, "Défi", top_skill(c))
 
-    # 4. Révision espacée : la compétence la moins travaillée récemment parmi les moins prioritaires.
+    # 5. Révision espacée : la compétence la moins travaillée récemment parmi les moins prioritaires.
     top2 = sorted(shares, key=shares.get, reverse=True)[:2]
     # La révision apporte une compétence différente de celles déjà travaillées dans la séance (variété).
     review_skills = [s for s in CATEGORIES if s not in top2 and ctx.games[s] >= CALIBRATED_GAMES and load[s] < 0.8]
@@ -352,7 +397,7 @@ def plan(ctx: Context, cands: list[Cand]) -> tuple[list[Item], dict]:
                 return c.weights[s] * model.bump(p_cache[c.beatmap_id], 0.72, 0.12) * base(c)
             take(max(pool, key=review_value), "Révision", s)
 
-    # 5. Échauffement : facile, court, dans ta compétence la plus solide (placé en tête de séance).
+    # 6. Échauffement : facile, court, dans ta compétence la plus solide (placé en tête de séance).
     #    Une seule fois par jour : si tu as déjà joué, tu es chaud, la suite reste du travail.
     #    Toujours une map vraiment facile : de préférence dans ta compétence la plus solide, mais jamais au prix de la
     #    difficulté (une compétence forte mais peu représentée dans les maps courtes donnait des « échauffements » à 4★).
@@ -365,13 +410,14 @@ def plan(ctx: Context, cands: list[Cand]) -> tuple[list[Item], dict]:
         c = max(pool, key=warm_value)
         take(c, "Échauffement", strongest if c.weights.get(strongest, 0) >= 0.3 else top_skill(c))
 
-    # 6. Si le temps réservé à l'échauffement, au défi et à la révision n'a pas été entièrement utilisé,
+    # 7. Si le temps réservé à l'échauffement, au défi et à la révision n'a pas été entièrement utilisé,
     #    on le consacre au travail ciblé : toute la séance demandée est utilisée.
     add_main(B, lambda: sum(i.minutes for i in chosen))
 
-    # Ordre : échauffement, tests, examen, travail (du plus accessible au plus dur), défi, révision.
-    order = {"Échauffement": 0, "Test de niveau": 1, "Examen": 2, "Objectif": 3, "Entraînement": 3, "Défi": 4, "Révision": 5}
-    chosen.sort(key=lambda i: (order[i.role], -i.p if order[i.role] == 3 else 0))
+    # Ordre : échauffement, tests, examen, travail (du plus accessible au plus dur), montée, défi, révision.
+    order = {"Échauffement": 0, "Test de niveau": 1, "Examen": 2, "Objectif": 3, "Entraînement": 3, "Montée": 4,
+             "Défi": 5, "Révision": 6}
+    chosen.sort(key=lambda i: (order[i.role], -i.p if order[i.role] in (3, 4) else 0))
     summary["minutes"] = round(sum(i.minutes for i in chosen), 1)
     return chosen, summary
 
@@ -389,7 +435,8 @@ def candidate_window(ratings: dict) -> tuple[float, float]:
 def load_candidates(conn, window: tuple[float, float] = (0.0, 99.0)) -> list[Cand]:
     placeholders = ",".join("?" * len(progression.PLAYABLE_STATUSES))
     rows = conn.execute(
-        f"""SELECT a.beatmap_id, a.stars, a.weights, a.attrs, b.beatmapset_id, b.creator, b.playcount, b.favourites
+        f"""SELECT a.beatmap_id, a.stars, a.weights, a.attrs, b.beatmapset_id, b.creator, b.playcount, b.favourites,
+                   b.status
             FROM map_attrs a JOIN beatmaps b ON b.beatmap_id = a.beatmap_id
             WHERE a.mods_key = '' AND b.status IN ({placeholders}) AND a.stars BETWEEN ? AND ?
               AND (b.playcount >= ? OR b.favourites >= ?)""",
@@ -400,7 +447,8 @@ def load_candidates(conn, window: tuple[float, float] = (0.0, 99.0)) -> list[Can
         attrs = json.loads(r["attrs"])
         out.append(Cand(r["beatmap_id"], r["beatmapset_id"] or 0, r["creator"] or "", r["stars"],
                         json.loads(r["weights"]), attrs.get("length_s") or 0.0, r["playcount"] or 0,
-                        r["favourites"] or 0, attrs.get("hp", HP_REF)))
+                        r["favourites"] or 0, attrs.get("hp", HP_REF),
+                        tuple(attrs["pp_fc"]) if attrs.get("pp_fc") and r["status"] in pp.PP_STATUSES else None))
     return out
 
 
@@ -498,6 +546,8 @@ def build_context(conn, ratings: dict, day: str, exclude: set, cands: list[Cand]
         hp_k=(clear or {}).get("hp_k", 0.0),
         load2d=l2, load7d=l7, history=load_history(conn, cands, day),
         tier_open=tier_open, exam=exam, exam_level_c=state["target_c"], exclude=set(exclude),
+        levels={s: ratings[s].get("level", ratings[s]["rating"]) for s in CATEGORIES},
+        typical_acc=pp.typical_accuracy(conn), top_pp=(pp.best_scores(conn) or [{"pp": 0.0}])[0]["pp"],
     )
 
 
@@ -626,6 +676,8 @@ def still_fits(role: str, p_meet: float, p_finish: float | None, target_meet: fl
         return p_meet <= 0.92
     if role == "Défi":
         return p_finish is None or 0.15 <= p_finish <= 0.65
+    if role == "Montée":
+        return p_finish is None or 0.35 <= p_finish <= 0.9
     return True  # échauffement, maps de palier et d'examen : imposées ou sans enjeu
 
 
@@ -653,7 +705,7 @@ def refresh_pending(conn, ratings: dict, cfg: dict, rows) -> list[dict]:
         p_finish = model.finish_prob_for(clear, m["stars"], hp)
         if not still_fits(item["role"], p_meet, p_finish, target_meet):
             continue
-        item["p"] = p_finish if item["role"] == "Défi" and p_finish is not None else p_meet
+        item["p"] = p_finish if item["role"] in FINISH_ROLES and p_finish is not None else p_meet
         item["minutes"] = model.minutes_for(attrs.get("length_s") or 0, attempts_expected(item["role"], item["p"]))
         out.append(item)
     return out
@@ -685,7 +737,7 @@ def forecast_check(conn, today: str, days: int = 14) -> dict:
         (today, since)).fetchall()
     n = met = predicted = 0.0
     for r in rows:
-        if r["role"] in ("Échauffement", "Test de niveau", "Défi"):  # le défi prévoit de finir, pas l'objectif
+        if r["role"] in ("Échauffement", "Test de niveau") + FINISH_ROLES:  # elles prévoient de finir
             continue
         plays = progression.played_on(conn, r["beatmap_id"], r["day"])
         if not plays:

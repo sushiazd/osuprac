@@ -16,7 +16,7 @@ def setup_pool(conn, n=120):
         cat = CATEGORIES[i % len(CATEGORIES)]
         add_map(conn, i, stars=2.6 + (i % 30) * 0.05, weights={cat: 0.7, "aim" if cat != "aim" else "speed": 0.3},
                 length_s=90 + (i % 4) * 30)
-    conn.executemany("INSERT INTO ratings VALUES (?, 3.0, 30)", [(c,) for c in CATEGORIES])
+    conn.executemany("INSERT INTO ratings (category, rating, games) VALUES (?, 3.0, 30)", [(c,) for c in CATEGORIES])
     conn.commit()
 
 
