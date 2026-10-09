@@ -4,7 +4,8 @@ from dataclasses import dataclass
 import rosu_pp_py as rosu
 
 from . import mods as modlib
-from .osufile import get_osu_bytes, pattern_features
+from . import ppcalc
+from .osufile import get_osu_bytes, osu_path, pattern_features
 
 CATEGORIES = ["aim", "speed", "stamina", "accuracy", "reading", "tech"]
 # À incrémenter quand classify() change : les poids en base sont alors recalculés.
@@ -60,17 +61,23 @@ EXAM_CRITERION = Criterion(80, 2)
 
 def map_attributes(beatmap_id: int, mods: list[dict]) -> dict:
     content = get_osu_bytes(beatmap_id)
-    return attributes_from_content(content, mods)
+    return attributes_from_content(content, mods, osu_path(beatmap_id))
 
 
-def attributes_from_content(content: bytes, mods: list[dict]) -> dict:
+def attributes_from_content(content: bytes, mods: list[dict], path=None) -> dict:
+    """Attributs d'une map. Les étoiles sont celles du jeu (calcul officiel d'osu!, voir ppcalc) quand il est
+    disponible ; le profil aim/speed/sliders vient de rosu-pp, sur lequel le classement par compétence est calibré."""
     rosu_mods = modlib.difficulty_mods(mods)
     beatmap = rosu.Beatmap(bytes=content)
     diff = rosu.Difficulty(mods=rosu_mods, lazer=True).calculate(beatmap)
     base = rosu.BeatmapAttributesBuilder(map=beatmap, mods=rosu_mods).build()
     feats = pattern_features(content, base.clock_rate)
+    live = ppcalc.official(path, rosu_mods) if path is not None else None
+    extra = {"pp_fc": live[1]} if live else {}
     return {
-        "stars": round(diff.stars, 3),
+        "stars": round(live[0] if live else diff.stars, 3),
+        "stars_engine": "live" if live else "rosu",
+        **extra,
         "aim": round(diff.aim or 0, 3),
         "speed": round(diff.speed or 0, 3),
         "slider_factor": round(diff.slider_factor or 1, 4),

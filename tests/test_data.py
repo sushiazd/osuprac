@@ -115,3 +115,20 @@ def test_sync_refuses_to_mix_two_players(monkeypatch, conn, tmp_path):
     monkeypatch.setattr("osuprog.sync.db.daily_backup", lambda *a, **k: False)
     with pytest.raises(WrongPlayer):
         _sync("un_ami", lambda *_: None, FakeApi({"id": 2, "username": "un_ami"}))
+
+
+def test_quitting_a_map_is_not_a_fail(conn):
+    """Échap après quelques notes : osu! l'enregistre comme un fail, l'outil l'ignore (notes, séance, prévisions)."""
+    from osuprog import rating
+    add_map(conn, 5, n_objects=300)
+    quit_ = score(1, 5, "2026-10-08T20:00:00Z", accuracy=0.8, miss=1, passed=False)
+    quit_["statistics"] = {"great": 10, "ok": 2, "meh": 0, "miss": 1}
+    died = score(2, 5, "2026-10-08T20:05:00Z", accuracy=0.6, miss=25, passed=False)
+    died["statistics"] = {"great": 100, "ok": 40, "meh": 10, "miss": 25}
+    store_score(conn, quit_, "recent")
+    store_score(conn, died, "recent")
+    flags = dict(conn.execute("SELECT score_id, abandoned FROM scores").fetchall())
+    assert flags == {1: 1, 2: 0}
+    assert [p["n_miss"] for p in progression.played_on(conn, 5, "2026-10-08")] == [25]
+    rating.recompute(conn)
+    assert {r[0] for r in conn.execute("SELECT DISTINCT score_id FROM rating_events")} == {2}

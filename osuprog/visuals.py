@@ -78,7 +78,7 @@ def role_label(role: str | None, reason: str = "") -> str:
 
 
 def now_card(info: dict, *, role: str | None, skill_label: str, goal: str, p: float | None,
-             minutes: float | None, reason: str = "") -> str:
+             minutes: float | None, reason: str = "", fc_pp: float | None = None) -> str:
     """La map à jouer maintenant : bannière, titre, quelques infos, et l'objectif."""
     cover = cover_url(info.get("set_id"))
     attrs = info.get("attrs") or {}
@@ -88,7 +88,9 @@ def now_card(info: dict, *, role: str | None, skill_label: str, goal: str, p: fl
     if minutes:
         meta.append(f"<span>≈ {minutes:.0f} min</span>")
     if p is not None and role not in ("Échauffement", "Test de niveau"):
-        meta.append(f"<span>{round(p * 100)} % de chances</span>")
+        meta.append(f"<span>{round(p * 100)} % de chances {'de la finir' if role == 'Défi' else 'de réussir'}</span>")
+    if fc_pp:
+        meta.append(f"<span>≈ {fc_pp:.0f} pp en FC</span>")
     cover_html = f'<div class="op-now-cover" style="background-image:url(\'{cover}\')"></div>' if cover else ""
     reason_html = f'<div class="op-now-sub" style="margin-top:10px">{esc(reason)}</div>' if reason else ""
     return f"""
@@ -110,7 +112,8 @@ def map_row(info: dict, *, number: int | None, role: str | None, state: str = "t
     thumb = cover_url(info.get("set_id"), "list")
     thumb_html = (f'<img class="op-thumb" src="{thumb}" alt="">' if thumb else '<div class="op-thumb"></div>')
     status = {"done": icon("check_circle", "op-check"), "retry": icon("replay", "op-retry")}.get(state, "")
-    chance = (f"<span>{round(p * 100)} %</span>" if p is not None and state == "todo"
+    chance = (f'<span title="Chances {"de la finir" if role == "Défi" else "de réussir l&#39;objectif"}">'
+              f"{round(p * 100)} %</span>" if p is not None and state == "todo"
               and role not in ("Échauffement", "Test de niveau") else "")
     num_html = f'<div class="op-num">{number}</div>' if number is not None else ""
     return (f'<div class="op-row{" op-done" if state == "done" else ""}">{num_html}{thumb_html}'
@@ -118,6 +121,19 @@ def map_row(info: dict, *, number: int | None, role: str | None, state: str = "t
             f'<div class="op-row-sub">{esc(info.get("version"))} · {esc(info.get("artist"))}</div></div>'
             f'<div class="op-row-side">{role_label(role, reason)}{chance}<span>{star(info.get("stars"))}</span>'
             f'{status}</div></div>')
+
+
+def pp_row(m: dict, sub: str = "", tip: str = "") -> str:
+    """Une map de la chasse aux pp : vignette, titre [difficulté], et ce qu'elle rapporte en full combo."""
+    thumb = cover_url(m.get("set_id"), "list")
+    thumb_html = (f'<img class="op-thumb" src="{thumb}" alt="">' if thumb else '<div class="op-thumb"></div>')
+    side = [f"<span><b>{m['pp']:.0f} pp</b></span>", f"<span>{star(m.get('stars'))}</span>"]
+    if m.get("length_s"):
+        side.append(f"<span>{icon('timer')}{length(m['length_s'])}</span>")
+    return (f'<div class="op-row" title="{esc(tip)}">{thumb_html}'
+            f'<div class="op-row-text"><div class="op-row-title">{esc(m.get("title"))} [{esc(m.get("version"))}]</div>'
+            f'<div class="op-row-sub">{esc(sub or m.get("artist"))}</div></div>'
+            f'<div class="op-row-side">{"".join(side)}</div></div>')
 
 
 # --- Compétences -------------------------------------------------------------------------------------

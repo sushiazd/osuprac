@@ -21,11 +21,11 @@ if errorlevel 1 goto deps_failed
 
 :lazer
 rem Lecteur des parties locales de lazer (optionnel, demande Node.js) : installe une seule fois.
-if exist "tools\lazer-export\node_modules\realm" goto env
-if not exist "%APPDATA%\osu\client.realm" goto env
+if exist "tools\lazer-export\node_modules\realm" goto dotnet
+if not exist "%APPDATA%\osu\client.realm" goto dotnet
 where node >nul 2>nul || (
     echo Astuce : installe Node.js ^(https://nodejs.org^) pour que l'outil lise aussi tes parties locales de lazer.
-    goto env
+    goto dotnet
 )
 echo Installation du lecteur de parties lazer, une seule fois...
 pushd tools\lazer-export
@@ -33,6 +33,14 @@ call npm install --omit=dev --no-audit --no-fund --loglevel=error
 rem Le paquet pese ~680 Mo, presque tout pour iPhone et Android : on ne garde que la version Windows (~9 Mo).
 node -e "const fs=require('fs'),p=require('path'),d=p.join('node_modules','realm','prebuilds');if(fs.existsSync(d))for(const n of fs.readdirSync(d))if(n!=='node')fs.rmSync(p.join(d,n),{recursive:true,force:true})"
 popd
+
+:dotnet
+rem Calcul des pp et des etoiles officiels d'osu! (tools\ppcalc) : il lui faut le runtime .NET 8, installe une seule fois
+rem dans le dossier utilisateur (~30 Mo, sans droits administrateur). Sans lui, l'outil utilise un calcul approche.
+if not exist "tools\ppcalc\ppcalc.dll" goto env
+".venv\Scripts\python.exe" -c "import sys; from osuprog.ppcalc import dotnet_exe; sys.exit(0 if dotnet_exe() else 1)" 2>nul && goto env
+echo Installation du runtime .NET 8 pour le calcul des pp, une seule fois...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; $s=Join-Path $env:TEMP 'dotnet-install.ps1'; Invoke-WebRequest https://dot.net/v1/dotnet-install.ps1 -OutFile $s; & $s -Runtime dotnet -Channel 8.0 -InstallDir (Join-Path $env:USERPROFILE '.dotnet') -NoPath"
 
 :env
 if exist ".env" goto run

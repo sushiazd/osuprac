@@ -5,7 +5,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from . import db, planner, progression, visuals
+from . import db, planner, pp, progression, visuals
 from .fmt import num, pct, stars  # noqa: F401  (réexportés pour les pages)
 from .skills import LABELS
 
@@ -51,16 +51,17 @@ def short_goal(crit, n_objects: int | None) -> str:
 
 def map_info(conn, beatmap_id: int) -> dict:
     row = conn.execute(
-        """SELECT b.artist, b.title, b.version, b.beatmapset_id, a.stars, a.attrs
+        """SELECT b.artist, b.title, b.version, b.beatmapset_id, b.status, a.stars, a.attrs
            FROM beatmaps b LEFT JOIN map_attrs a ON a.beatmap_id = b.beatmap_id AND a.mods_key = ''
            WHERE b.beatmap_id = ?""",
         (beatmap_id,),
     ).fetchone()
     if not row:
         return {"title": f"Map {beatmap_id}", "artist": "", "version": "", "set_id": None, "stars": None,
-                "attrs": {}, "url": f"https://osu.ppy.sh/beatmaps/{beatmap_id}"}
+                "attrs": {}, "status": None, "url": f"https://osu.ppy.sh/beatmaps/{beatmap_id}"}
     return {
         "title": row["title"], "artist": row["artist"], "version": row["version"], "set_id": row["beatmapset_id"],
+        "status": row["status"],
         "stars": row["stars"], "attrs": json.loads(row["attrs"]) if row["attrs"] else {},
         "url": f"https://osu.ppy.sh/beatmaps/{beatmap_id}",
     }
@@ -153,9 +154,11 @@ def map_card(conn, beatmap_id: int, *, role: str | None = None, cat: str, level_
     role = OLD_ROLE_NAMES.get(role, role)
     key = f"{key}-{number}" if number is not None else key
     if highlight:
+        fc = pp.fc_pp(info["attrs"], pp.typical_accuracy(conn)) if info["status"] in pp.PP_STATUSES else None
         st.html(visuals.now_card(info, role=role, skill_label=skill_label(cat),
                                  goal=goal_sentence(role or "Objectif", crit, info["attrs"].get("n_objects")),
-                                 p=p, minutes=minutes, reason=role_sentence(role, cat, level_c) if role else ""))
+                                 p=p, minutes=minutes, reason=role_sentence(role, cat, level_c) if role else "",
+                                 fc_pp=fc))
         with st.container(horizontal=True, vertical_alignment="center", gap="small"):
             st.link_button("Ouvrir dans osu!", game_link(beatmap_id), type="primary", icon=":material/play_arrow:",
                            help="Ouvre la map dans osu! lazer, qui la télécharge si besoin.")

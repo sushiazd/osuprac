@@ -6,3 +6,5 @@ __pycache__/
 tools/lazer-export/node_modules/
 sauvegardes/
 osu-progression.zip
+tools/ppcalc-src/obj/
+tools/ppcalc-src/bin/

@@ -67,3 +67,22 @@ def test_unmeasured_skill_gets_a_level_test():
     games["tech"] = 0.0
     items, _ = plan(context(games=games), candidates())
     assert any(i.role == "Test de niveau" and i.category == "tech" for i in items)
+
+
+def test_warm_up_stays_easy_even_if_the_strongest_skill_only_has_hard_short_maps():
+    # Stamina est la plus forte, mais ses seules maps courtes sont à 4,3★ : l'échauffement ne doit pas y aller.
+    ratings = {s: 3.0 for s in CATEGORIES} | {"stamina": 3.4}
+    cands = candidates() + [Cand(beatmap_id=900 + i, set_id=900 + i, creator=f"s{i}", stars=4.3,
+                                 weights={"stamina": 1.0}, length_s=120, playcount=10_000, favourites=100)
+                            for i in range(5)]
+    items, _ = plan(context(ratings=ratings), cands)
+    warm = next(i for i in items if i.role == "Échauffement")
+    assert warm.beatmap_id < 900 and warm.p >= planner.WARM_MIN_P
+
+
+def test_challenge_shows_its_chance_to_finish_the_map():
+    from osuprog import model
+    items, _ = plan(context(), candidates())
+    challenge = next(i for i in items if i.role == "Défi")
+    c = next(c for c in candidates() if c.beatmap_id == challenge.beatmap_id)
+    assert abs(challenge.p - model.finish_prob(c.stars, c.hp, 3.5, 0.55)) < 1e-9

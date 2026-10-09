@@ -93,3 +93,17 @@ def test_new_replay_folder_is_detected(tmp_path):
     (files / "c" / "cd" / "replay").write_bytes(b"x")  # lazer dépose un replay
     assert live.newest_subfolder_mtime(files) >= before + 1
     assert live.newest_subfolder_mtime(tmp_path / "absent") == 0.0
+
+
+def test_chances_follow_your_ratings_and_too_easy_maps_are_replaced(conn):
+    setup_pool(conn)
+    planner.build_session(conn, None, ratings(conn), DAY, log=lambda *_: None)
+    before = {r["beatmap_id"]: r["p"] for r in conn.execute("SELECT * FROM session_plan WHERE role = 'Entraînement'")}
+    conn.execute("UPDATE ratings SET rating = rating + 0.8")  # une synchro remonte franchement tes notes
+    conn.commit()
+    planner.build_session(conn, None, ratings(conn), DAY, log=lambda *_: None)
+    after = {r["beatmap_id"]: r["p"] for r in conn.execute("SELECT * FROM session_plan WHERE role = 'Entraînement'")}
+    kept = before.keys() & after.keys()
+    assert all(after[b] > before[b] for b in kept)                  # chances recalculées, pas figées
+    assert all(abs(p - 0.5) <= planner.DRIFT_TOLERANCE for p in after.values())  # plus de map devenue trop facile
+    assert before.keys() != after.keys()

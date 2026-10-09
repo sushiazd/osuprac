@@ -120,6 +120,7 @@ if has_data:
         st.Page("app_pages/aujourdhui.py", title="Aujourd'hui", icon=":material/today:", default=True),
         st.Page("app_pages/competences.py", title="Compétences", icon=":material/insights:"),
         st.Page("app_pages/paliers.py", title="Progression", icon=":material/flag:"),
+        st.Page("app_pages/pp.py", title="pp", icon=":material/bolt:"),
         st.Page("app_pages/historique.py", title="Historique", icon=":material/history:"),
         st.Page("app_pages/guide.py", title="Guide", icon=":material/help:"),
     ]

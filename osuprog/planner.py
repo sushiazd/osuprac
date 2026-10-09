@@ -29,7 +29,7 @@ from .model import CALIBRATED_GAMES, DEFAULT_CLEAR_SCALE
 from .rating import HP_REF, effective_stars
 from .skills import CATEGORIES, CRITERIA, LABELS
 
-PLAN_FORMAT = 16               # à incrémenter quand l'algorithme change
+PLAN_FORMAT = 18               # à incrémenter quand l'algorithme change
 # intensité -> (chances de FINIR la map visées, chances d'atteindre l'OBJECTIF de précision visées)
 # « équilibré » est le réglage le plus robuste en simulation (meilleure moyenne et meilleur pire cas
 # sous quatre hypothèses d'apprentissage, voir tools/simulate_training.py).
@@ -45,6 +45,9 @@ TIER_BONUS = 1.3              # une map de palier fait aussi avancer le débloca
 MAX_TESTS = 2
 MAX_PER_CREATOR = 2
 PLAN_FINISH_FLOOR = 0.25      # on ne propose pas de map que tu as très peu de chances de finir
+DRIFT_TOLERANCE = 0.30        # une map d'entraînement prévue est remplacée si ses chances s'écartent de plus de 30 pts
+WARM_MIN_P, WARM_MIN_FINISH = 0.65, 0.85  # échauffement : objectif probable, map finie presque à coup sûr
+CAND_BELOW, CAND_ABOVE = 2.0, 1.5  # maps candidates : de 2★ sous ta compétence la plus faible à 1,5★ au-dessus de la plus forte
 
 
 # --- Structures ----------------------------------------------------------------------------
@@ -237,7 +240,8 @@ def plan(ctx: Context, cands: list[Cand]) -> tuple[list[Item], dict]:
                 and (not c.creator or creators[c.creator] < MAX_PER_CREATOR))
 
     def take(c: Cand, role: str, skill: str, level_c: int | None = None) -> Item:
-        p = p_cache[c.beatmap_id]
+        # Le défi a pour but de FINIR la map : on affiche donc ses chances de la finir, pas celles de l'objectif.
+        p = p_finish_of(c) if role == "Défi" and ctx.clear_level is not None else p_cache[c.beatmap_id]
         tier = ctx.tier_open.get(c.beatmap_id)
         item = Item(
             role=role, category=skill,
@@ -350,13 +354,16 @@ def plan(ctx: Context, cands: list[Cand]) -> tuple[list[Item], dict]:
 
     # 5. Échauffement : facile, court, dans ta compétence la plus solide (placé en tête de séance).
     #    Une seule fois par jour : si tu as déjà joué, tu es chaud, la suite reste du travail.
+    #    Toujours une map vraiment facile : de préférence dans ta compétence la plus solide, mais jamais au prix de la
+    #    difficulté (une compétence forte mais peu représentée dans les maps courtes donnait des « échauffements » à 4★).
     strongest = model.strongest_skill(ctx.ratings, ctx.games)
-    pool = [c for c in cands if usable(c) and c.length_s <= 150 and c.stars >= ctx.level - 1.3
-            and c.weights.get(strongest, 0) >= 0.3]
+    pool = [c for c in cands if usable(c) and c.length_s <= 150 and ctx.level - 1.3 <= c.stars <= ctx.level - 0.4
+            and p_cache[c.beatmap_id] >= WARM_MIN_P and (p_finish_of(c) or 1.0) >= WARM_MIN_FINISH]
     if pool and B >= 25 and not ctx.warmed_up:
         def warm_value(c):
-            return c.weights[strongest] * model.bump(p_cache[c.beatmap_id], 0.88, 0.08) * base(c)
-        take(max(pool, key=warm_value), "Échauffement", strongest)
+            return (0.5 + c.weights.get(strongest, 0)) * model.bump(p_cache[c.beatmap_id], 0.88, 0.08) * base(c)
+        c = max(pool, key=warm_value)
+        take(c, "Échauffement", strongest if c.weights.get(strongest, 0) >= 0.3 else top_skill(c))
 
     # 6. Si le temps réservé à l'échauffement, au défi et à la révision n'a pas été entièrement utilisé,
     #    on le consacre au travail ciblé : toute la séance demandée est utilisée.
@@ -371,13 +378,22 @@ def plan(ctx: Context, cands: list[Cand]) -> tuple[list[Item], dict]:
 
 # --- Couche base de données ----------------------------------------------------------------
 
-def load_candidates(conn) -> list[Cand]:
+def candidate_window(ratings: dict) -> tuple[float, float]:
+    """Tranche d'étoiles où chercher : le catalogue contient toutes les maps classées, inutile de tout parcourir."""
+    levels = [r["rating"] for r in ratings.values()] if ratings else []
+    if not levels:
+        return 0.0, 99.0
+    return min(levels) - CAND_BELOW, max(levels) + CAND_ABOVE
+
+
+def load_candidates(conn, window: tuple[float, float] = (0.0, 99.0)) -> list[Cand]:
     placeholders = ",".join("?" * len(progression.PLAYABLE_STATUSES))
     rows = conn.execute(
         f"""SELECT a.beatmap_id, a.stars, a.weights, a.attrs, b.beatmapset_id, b.creator, b.playcount, b.favourites
             FROM map_attrs a JOIN beatmaps b ON b.beatmap_id = a.beatmap_id
-            WHERE a.mods_key = '' AND b.status IN ({placeholders})""",
-        progression.PLAYABLE_STATUSES,
+            WHERE a.mods_key = '' AND b.status IN ({placeholders}) AND a.stars BETWEEN ? AND ?
+              AND (b.playcount >= ? OR b.favourites >= ?)""",
+        (*progression.PLAYABLE_STATUSES, *window, progression.MIN_PLAYCOUNT, progression.MIN_FAVOURITES),
     ).fetchall()
     out = []
     for r in rows:
@@ -394,7 +410,7 @@ def load_history(conn, cands: list[Cand], day: str) -> dict[int, History]:
     out = {}
     for r in conn.execute(
         """SELECT beatmap_id, count(*) AS n, max(ended_at) AS last FROM scores
-           WHERE countable = 1 AND source != 'inferred_fail' GROUP BY beatmap_id"""
+           WHERE countable = 1 AND NOT abandoned AND source != 'inferred_fail' GROUP BY beatmap_id"""
     ):
         c = by_id.get(r["beatmap_id"])
         if not c:
@@ -544,7 +560,7 @@ def build_session(conn, api, ratings: dict, day: str, log=print) -> None:
     cfg = settings(conn)
     ignored = progression.ignored_maps(conn)
     base = [PLAN_FORMAT, day, cfg["intensity"], db.get_meta(conn, "session_variant", {}).get(day, 0)]
-    key = base + [session_budget(conn, day), _plays_today(conn, day), len(ignored)]
+    key = base + [session_budget(conn, day), _plays_today(conn, day), len(ignored), model_fingerprint(conn, ratings)]
     stored = db.get_meta(conn, "session_key")
     existing = conn.execute("SELECT * FROM session_plan WHERE day = ? ORDER BY pos", (day,)).fetchall()
     if existing and stored == key:
@@ -555,6 +571,9 @@ def build_session(conn, api, ratings: dict, day: str, log=print) -> None:
     played_ids = {r["beatmap_id"] for r in played}
     pending = [] if full else [r for r in existing
                                if r["beatmap_id"] not in played_ids and r["beatmap_id"] not in ignored]
+    # Tes notes ont pu bouger depuis que ces maps ont été choisies (synchro, parties jouées) : chances recalculées,
+    # et une map devenue trop facile ou trop dure laisse sa place.
+    pending = refresh_pending(conn, ratings, cfg, pending)
     budget = session_budget(conn, day)
     # Le temps déjà passé : le plus grand entre l'estimation des maps jouées et le temps réel (téléchargements,
     # essais hors programme…).
@@ -564,7 +583,7 @@ def build_session(conn, api, ratings: dict, day: str, log=print) -> None:
 
     items, summary = [], None
     if remaining >= 3.0:
-        cands = load_candidates(conn)
+        cands = load_candidates(conn, candidate_window(ratings))
         exclude = {r["beatmap_id"] for r in existing} | ignored
         ctx = build_context(conn, ratings, day, exclude=exclude, cands=cands)
         ctx.budget_min = remaining
@@ -588,6 +607,56 @@ def build_session(conn, api, ratings: dict, day: str, log=print) -> None:
         db.set_meta(conn, "plan_summary", summary)
     db.set_meta(conn, "session_key", key)
     conn.commit()
+
+
+def model_fingerprint(conn, ratings: dict) -> list:
+    """Ce qui fait bouger les chances des maps : tes notes, le recalage et ton niveau de passe (arrondis, pour ne pas
+    tout recalculer pour un rien)."""
+    clear = db.get_meta(conn, "clear_level") or {}
+    a, b = model.load_calibration(conn)
+    return ([round(ratings[s]["rating"], 1) for s in CATEGORIES if s in ratings]
+            + [round(a, 1), round(b, 1), round(clear.get("level", 0), 1)])
+
+
+def still_fits(role: str, p_meet: float, p_finish: float | None, target_meet: float) -> bool:
+    """Une map prévue reste-t-elle dans la bonne zone de difficulté avec les chances à jour ?"""
+    if role == "Entraînement":
+        return abs(p_meet - target_meet) <= DRIFT_TOLERANCE and (p_finish is None or p_finish >= PLAN_FINISH_FLOOR)
+    if role == "Révision":
+        return p_meet <= 0.92
+    if role == "Défi":
+        return p_finish is None or 0.15 <= p_finish <= 0.65
+    return True  # échauffement, maps de palier et d'examen : imposées ou sans enjeu
+
+
+def refresh_pending(conn, ratings: dict, cfg: dict, rows) -> list[dict]:
+    """Chances et durées à jour des maps restant à jouer ; retire celles qui ne sont plus à la bonne difficulté."""
+    if not rows:
+        return []
+    ids = [r["beatmap_id"] for r in rows]
+    info = {r["beatmap_id"]: r for r in conn.execute(
+        f"SELECT beatmap_id, stars, weights, attrs FROM map_attrs WHERE mods_key = '' AND beatmap_id IN "
+        f"({','.join('?' * len(ids))})", ids)}
+    clear = db.get_meta(conn, "clear_level")
+    calib = model.load_calibration(conn)
+    current = {s: v["rating"] for s, v in ratings.items()}
+    target_meet = INTENSITY[cfg["intensity"]][1]
+    out = []
+    for r in rows:
+        item, m = dict(r), info.get(r["beatmap_id"])
+        if m is None or set(json.loads(m["weights"])) - set(current):
+            out.append(item)
+            continue
+        attrs = json.loads(m["attrs"])
+        hp = attrs.get("hp", HP_REF)
+        p_meet = model.p_map(json.loads(m["weights"]), current, effective_stars(m["stars"], hp), calib)
+        p_finish = model.finish_prob_for(clear, m["stars"], hp)
+        if not still_fits(item["role"], p_meet, p_finish, target_meet):
+            continue
+        item["p"] = p_finish if item["role"] == "Défi" and p_finish is not None else p_meet
+        item["minutes"] = model.minutes_for(attrs.get("length_s") or 0, attempts_expected(item["role"], item["p"]))
+        out.append(item)
+    return out
 
 
 def _played_today(conn, beatmap_id: int, day: str) -> bool:
@@ -616,7 +685,7 @@ def forecast_check(conn, today: str, days: int = 14) -> dict:
         (today, since)).fetchall()
     n = met = predicted = 0.0
     for r in rows:
-        if r["role"] in ("Échauffement", "Test de niveau"):
+        if r["role"] in ("Échauffement", "Test de niveau", "Défi"):  # le défi prévoit de finir, pas l'objectif
             continue
         plays = progression.played_on(conn, r["beatmap_id"], r["day"])
         if not plays:

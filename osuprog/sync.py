@@ -3,7 +3,7 @@ import json
 import time
 from datetime import date
 
-from . import db, lazer, model, planner, progression, rating, rewards
+from . import db, lazer, model, planner, pp, progression, rating, rewards
 from . import mods as modlib
 from .api import OsuApi
 from .config import OSU_USERNAME
@@ -16,6 +16,8 @@ SCORED_STATUSES = ("ranked", "approved", "loved", "qualified")
 INFERRED_FAIL_MIN_PLAYS = 3
 INFERRED_FAIL_DATE = "2000-01-01T00:00:00Z"  # date inconnue : rangé avant tout le reste
 DUPLICATE_WINDOW_S = 15  # deux parties de la même map à moins de 15 s d'écart = la même partie
+SCORE_COLUMNS = ("score_id, beatmap_id, mods, mods_key, accuracy, max_combo, n_great, n_ok, n_meh, n_miss, passed, "
+                 "grade, pp, ended_at, source, countable, stats")
 
 
 def store_score(conn, s: dict, source: str) -> bool:
@@ -35,7 +37,7 @@ def store_score(conn, s: dict, source: str) -> bool:
         conn.execute(f"DELETE FROM scores WHERE score_id IN ({twin.format('<')})",
                      (s["beatmap_id"], s["ended_at"], DUPLICATE_WINDOW_S))
     cur = conn.execute(
-        """INSERT OR IGNORE INTO scores VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        f"""INSERT OR IGNORE INTO scores ({SCORE_COLUMNS}) VALUES ({",".join("?" * 17)})""",
         (
             s["id"],
             s["beatmap_id"],
@@ -53,8 +55,14 @@ def store_score(conn, s: dict, source: str) -> bool:
             s["ended_at"],
             source,
             int(modlib.is_countable(mods)),
+            json.dumps(stats) if stats else None,
         ),
     )
+    if cur.rowcount == 0 and stats:
+        # Parties enregistrées avant qu'on garde les statistiques complètes (fins de sliders...) : on complète.
+        conn.execute("""UPDATE scores SET stats = ? WHERE score_id = ?
+                        AND (stats IS NULL OR (stats NOT LIKE '%slider_tail_hit%' AND ? LIKE '%slider_tail_hit%'))""",
+                     (json.dumps(stats), s["id"], json.dumps(stats)))
     return cur.rowcount == 1
 
 
@@ -108,7 +116,8 @@ def update_inferred_fails(conn) -> None:
         (INFERRED_FAIL_MIN_PLAYS, *SCORED_STATUSES),
     ).fetchall()
     conn.executemany(
-        "INSERT OR REPLACE INTO scores VALUES (?, ?, '[]', '', 0, 0, 0, 0, 0, 0, 0, 'F', NULL, ?, 'inferred_fail', 1)",
+        f"INSERT OR REPLACE INTO scores ({SCORE_COLUMNS}) "
+        "VALUES (?, ?, '[]', '', 0, 0, 0, 0, 0, 0, 0, 'F', NULL, ?, 'inferred_fail', 1, NULL)",
         [(-r["beatmap_id"], r["beatmap_id"], INFERRED_FAIL_DATE) for r in rows],
     )
     conn.commit()
@@ -125,6 +134,7 @@ def sync(username: str | None = None, log=print, api=None) -> dict:
 
 def _sync(username: str | None, log, api) -> dict:
     started = time.monotonic()
+    db.repair_if_corrupt(log=log)
     conn = db.connect()
     known = db.get_meta(conn, "user")
     username = (username or (known or {}).get("username") or OSU_USERNAME).strip()
@@ -183,6 +193,11 @@ def _sync(username: str | None, log, api) -> dict:
 
     rows = conn.execute("SELECT DISTINCT beatmap_id, mods FROM scores WHERE countable = 1").fetchall()
     ensure_attrs_many(conn, [(r["beatmap_id"], json.loads(r["mods"])) for r in rows], log)
+
+    try:
+        pp.refresh_score_pp(conn, log)
+    except Exception as e:  # le détail des pp est un plus : il ne doit jamais bloquer la synchro
+        log(f"Calcul détaillé des pp impossible : {e}")
 
     progression.migrate_if_needed(conn, log)
     ratings = rating.recompute(conn)

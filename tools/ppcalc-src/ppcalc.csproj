@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <!-- Dossier du code d'osu! (ppy/osu) au commit de Program.Commit : voir build.ps1. -->
+    <OsuSource Condition="'$(OsuSource)' == ''">..\osu</OsuSource>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="$(OsuSource)\osu.Game.Rulesets.Osu\osu.Game.Rulesets.Osu.csproj" />
+  </ItemGroup>
+</Project>

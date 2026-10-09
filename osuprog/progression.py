@@ -20,6 +20,9 @@ MAPS_PER_TIER = 3
 EXAM_MAPS = 2
 MIN_WEIGHT = 0.4       # part minimale de la compétence dans une map de palier
 TIER_FINISH_FLOOR = 0.30  # on ne propose pas en palier une map que tu as très peu de chances de finir
+# Le catalogue contient toutes les maps classées, y compris des maps quasi jamais jouées (souvent moins soignées) :
+# paliers et programme ne proposent que des maps éprouvées par la communauté.
+MIN_PLAYCOUNT, MIN_FAVOURITES = 20_000, 100
 STUCK_ATTEMPTS = 8     # essais sans atteindre l'objectif avant de remplacer une map de palier
 UNFINISHABLE_ATTEMPTS = 3  # essais sans jamais la finir (et peu de chances d'y arriver) avant remplacement
 PRIOR_STRENGTH = 3     # poids de l'estimation du modèle face à tes essais réels (en nombre d'essais)
@@ -47,7 +50,7 @@ def best_result(conn, beatmap_id: int, crit: Criterion) -> dict | None:
     n_obj = n_objects_of(conn, beatmap_id)
     rows = conn.execute(
         "SELECT accuracy, n_miss, passed, mods, ended_at, source FROM scores "
-        "WHERE beatmap_id = ? AND countable = 1",
+        "WHERE beatmap_id = ? AND countable = 1 AND NOT abandoned",
         (beatmap_id,),
     ).fetchall()
     attempts = sum(r["source"] != "inferred_fail" for r in rows)
@@ -81,9 +84,9 @@ def candidates(conn, category: str | None, lo_c: int, hi_c: int, min_weight: flo
     rows = conn.execute(
         f"""SELECT a.beatmap_id, a.stars, a.weights, a.attrs, b.beatmapset_id, b.playcount, b.favourites
             FROM map_attrs a JOIN beatmaps b ON b.beatmap_id = a.beatmap_id
-            WHERE a.mods_key = '' AND a.stars >= ? AND a.stars < ?
+            WHERE a.mods_key = '' AND a.stars >= ? AND a.stars < ? AND (b.playcount >= ? OR b.favourites >= ?)
               AND b.status IN ({",".join("?" * len(PLAYABLE_STATUSES))})""",
-        (lo_c / 100, hi_c / 100, *PLAYABLE_STATUSES),
+        (lo_c / 100, hi_c / 100, MIN_PLAYCOUNT, MIN_FAVOURITES, *PLAYABLE_STATUSES),
     ).fetchall()
     ratings = {r["category"]: r["rating"] for r in conn.execute("SELECT category, rating FROM ratings")}
     calib = model.load_calibration(conn)
@@ -229,7 +232,8 @@ def retire_stuck_tier_maps(conn, log=print) -> int:
             if res and res["met"]:
                 continue
             plays = conn.execute(
-                "SELECT passed FROM scores WHERE beatmap_id = ? AND countable = 1 AND source != 'inferred_fail'",
+                "SELECT passed FROM scores WHERE beatmap_id = ? AND countable = 1 AND NOT abandoned "
+                "AND source != 'inferred_fail'",
                 (r["beatmap_id"],)).fetchall()
             attempts, finishes = len(plays), sum(bool(p["passed"]) for p in plays)
             finished = finishes > 0
@@ -383,7 +387,7 @@ def played_on(conn, beatmap_id: int, day: str) -> list[dict]:
     """Parties jouées sur cette map ce jour-là (heure locale), de la plus récente à la plus ancienne."""
     rows = conn.execute(
         "SELECT accuracy, n_miss, passed, mods, ended_at FROM scores "
-        "WHERE beatmap_id = ? AND countable = 1 AND source != 'inferred_fail' ORDER BY ended_at DESC",
+        "WHERE beatmap_id = ? AND countable = 1 AND NOT abandoned AND source != 'inferred_fail' ORDER BY ended_at DESC",
         (beatmap_id,),
     ).fetchall()
     return [dict(r) for r in rows if db.local_day(r["ended_at"]) == day]

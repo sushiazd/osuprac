@@ -4,7 +4,7 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
-from osuprog import db, fmt, planner, progression
+from osuprog import db, fmt, planner, ppcalc, progression
 from osuprog.rating import load as load_ratings
 from osuprog.skills import CATEGORIES, CRITERIA, LABELS
 from osuprog.ui import SKILL_PLAIN, criterion_text, stars
@@ -46,6 +46,23 @@ with st.expander("Précision au clic (UR)"):
         "tes clics, plus c'est bas mieux c'est. **Tendance** : si tu tapes en moyenne trop tôt ou trop tard (si "
         "c'est le cas sur toutes les maps, règle le décalage audio de lazer). **Miss de visée** : cliqué au bon "
         "moment mais à côté ; les autres miss sont des clics trop tôt ou trop tard.")
+
+st.subheader("Les pp")
+with st.expander("D'où viennent les chiffres"):
+    exact = ppcalc.engine_name() == ppcalc.LIVE
+    st.markdown(
+        "Les pp et les étoiles sont calculés avec **le code officiel d'osu!** : les mêmes valeurs que ton profil et "
+        "que le classement « Live » de pp.huismetbenen.nl, détail Aim / Tap / Acc / Reading compris. Le **total** "
+        "est celui de ton profil osu!. Chaque compétence classe tes parties selon ses propres pp, puis compte la "
+        "1re en entier, la 2e à 95 %, la 3e à 90 %… Le **bonus** vient du nombre de maps jouées, pas de ton niveau."
+        + ("" if exact else "\n\nPour l'instant le calcul est **approché** (rosu-pp, sans Reading) : il faut le "
+                            "runtime .NET 8. Relance `lancer.bat`, il l'installe tout seul (environ 30 Mo)."))
+with st.expander("La recherche « Objectif »"):
+    st.markdown(
+        "Elle parcourt **toutes les maps classées** (ranked et approved, les loved ne rapportent pas de pp) et garde "
+        "celles où un full combo à ta précision atteint l'objectif. Les premières sont les plus accessibles : peu de "
+        "miss attendus (d'après tes parties, selon les étoiles et la longueur), assez de chances de les finir (HP "
+        "compris). Survole une map pour voir ses pp avec 1 ou 3 miss et ce que gagnerait ton total.")
 
 st.subheader("La séance du jour")
 with st.expander("Comment les maps sont choisies"):

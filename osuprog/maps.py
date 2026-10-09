@@ -4,7 +4,7 @@ import json
 from importlib.metadata import version
 from pathlib import Path
 
-from . import db
+from . import db, ppcalc
 from . import mods as modlib
 from .osufile import download_many
 from .skills import CLASSIFIER_VERSION, classify, expected_ar, expected_od, map_attributes, primary
@@ -62,7 +62,7 @@ def backfill_hp(conn, log=print) -> int:
     import rosu_pp_py as rosu
 
     from .osufile import osu_path
-    rows = conn.execute("SELECT beatmap_id, mods_key, attrs FROM map_attrs").fetchall()
+    rows = conn.execute("SELECT beatmap_id, mods_key, attrs FROM map_attrs WHERE attrs NOT LIKE '%\"hp\"%'").fetchall()
     updated = 0
     for r in rows:
         attrs = json.loads(r["attrs"])
@@ -97,16 +97,24 @@ def rosu_version() -> str:
     return version("rosu-pp-py")
 
 
+def engine_version() -> str:
+    """Moteurs de calcul des attributs : rosu-pp (profil de la map) et calcul officiel d'osu! (étoiles)."""
+    return f"{rosu_version()}|{ppcalc.engine_version()}"
+
+
 def recompute_if_engine_changed(conn, log=print) -> int:
-    """Quand rosu-pp change de version (souvent parce qu'osu! a modifié son calcul d'étoiles), les étoiles en
-    cache ne correspondent plus au jeu : on recalcule tout depuis les fichiers .osu. Renvoie le nombre de maps."""
-    current, previous = rosu_version(), db.get_meta(conn, "rosu_version")
+    """Quand un moteur de calcul change (souvent parce qu'osu! a modifié son calcul d'étoiles), on recalcule
+    les maps que tu as jouées depuis leurs fichiers .osu. Les autres viennent du catalogue, recalculé à part.
+    Renvoie le nombre de maps recalculées."""
+    current, previous = engine_version(), db.get_meta(conn, "attrs_engine") or db.get_meta(conn, "rosu_version")
     if previous == current:
         return 0
-    rows = conn.execute("SELECT beatmap_id, mods_key FROM map_attrs").fetchall() if previous else []
+    rows = conn.execute(
+        """SELECT DISTINCT a.beatmap_id, a.mods_key FROM map_attrs a
+           JOIN scores s ON s.beatmap_id = a.beatmap_id AND s.mods_key = a.mods_key""").fetchall() if previous else []
     done = 0
     if rows:
-        log(f"Nouvelle version du calcul de difficulté ({previous} -> {current}) : recalcul de {len(rows)} maps…")
+        log(f"Nouvelle version du calcul de difficulté : recalcul des {len(rows)} maps que tu as jouées…")
         failed = download_many({r["beatmap_id"] for r in rows})
         for r in rows:
             if r["beatmap_id"] in failed:
@@ -118,7 +126,7 @@ def recompute_if_engine_changed(conn, log=print) -> int:
             except Exception as e:
                 log(f"  map {r['beatmap_id']} ignorée : {e}")
         log(f"{done} maps recalculées.")
-    db.set_meta(conn, "rosu_version", current)
+    db.set_meta(conn, "attrs_engine", current)
     conn.commit()
     return done
 
@@ -140,28 +148,36 @@ def reclassify_if_needed(conn) -> bool:
 
 
 def load_bundled_pool(conn, log=print) -> None:
-    """Charge le catalogue de maps déjà analysées fourni avec le projet (une seule fois par version)."""
+    """Charge le catalogue de maps déjà analysées fourni avec le projet (une seule fois par version).
+
+    Le catalogue fait foi pour les maps sans mods : il est calculé avec les étoiles officielles d'osu!.
+    """
     if not BUNDLED_POOL.exists():
         return
     with gzip.open(BUNDLED_POOL, "rt", encoding="utf-8") as f:
         data = json.load(f)
-    if db.get_meta(conn, "bundled_pool") == data["version"]:
+    version = f"{data['version']}:{len(data['maps'])}"  # deux catalogues du même jour restent distincts
+    if db.get_meta(conn, "bundled_pool") == version:
         return
-    if data.get("rosu") and data["rosu"] != rosu_version():
-        log(f"Catalogue calculé avec rosu-pp {data['rosu']} (tu as la {rosu_version()}) : ses étoiles peuvent "
-            "différer un peu du jeu. Pour le mettre à jour : python tools/build_pool.py")
-    known = {r["beatmap_id"] for r in conn.execute("SELECT beatmap_id FROM map_attrs WHERE mods_key = ''")}
+    log(f"Chargement du catalogue ({len(data['maps'])} maps)…")
+    beatmaps, attrs = [], []
     for m in data["maps"]:
-        db.upsert_beatmap(
-            conn,
-            {"id": m["id"], "beatmapset_id": m["set"], "version": m["version"], "status": m["status"],
-             "playcount": m["playcount"]},
-            {"artist": m["artist"], "title": m["title"], "creator": m["creator"],
-             "favourite_count": m["favourites"]},
-        )
-        if m["id"] not in known:
-            _store(conn, m["id"], "", m["attrs"])
-    db.set_meta(conn, "bundled_pool", data["version"])
+        beatmaps.append((m["id"], m["set"], m["artist"], m["title"], m["version"], m["creator"], m["status"],
+                         m["playcount"], m["favourites"]))
+        weights = classify(m["attrs"])
+        attrs.append((m["id"], "", m["attrs"]["stars"], primary(weights), json.dumps(m["attrs"]), json.dumps(weights)))
+    conn.executemany(
+        """INSERT INTO beatmaps VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(beatmap_id) DO UPDATE SET
+             artist = coalesce(nullif(beatmaps.artist, ''), excluded.artist),
+             title = coalesce(nullif(beatmaps.title, ''), excluded.title),
+             version = coalesce(nullif(beatmaps.version, ''), excluded.version),
+             creator = coalesce(nullif(beatmaps.creator, ''), excluded.creator),
+             status = coalesce(nullif(beatmaps.status, ''), excluded.status),  -- la synchro est plus récente
+             playcount = max(beatmaps.playcount, excluded.playcount),
+             favourites = max(beatmaps.favourites, excluded.favourites)""", beatmaps)
+    conn.executemany("INSERT OR REPLACE INTO map_attrs VALUES (?, ?, ?, ?, ?, ?)", attrs)
+    db.set_meta(conn, "bundled_pool", version)
     conn.commit()
     log(f"Catalogue chargé : {len(data['maps'])} maps déjà analysées.")
 

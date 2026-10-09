@@ -26,6 +26,15 @@
         "true"
       ],
       "port": 8503
+    },
+    {
+      "name": "dashboard-test",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "set OSU_DATA_DIR=C:\\Users\\sushi\\osu-pp-build\\preview-data&& .venv\\Scripts\\streamlit.exe run app.py --server.port 8504 --server.headless true"
+      ],
+      "port": 8504
     }
   ]
 }

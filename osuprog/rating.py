@@ -59,7 +59,7 @@ def recompute(conn) -> dict[str, dict]:
                   a.stars, a.weights, a.attrs
            FROM scores s JOIN map_attrs a
              ON a.beatmap_id = s.beatmap_id AND a.mods_key = s.mods_key
-           WHERE s.countable = 1
+           WHERE s.countable = 1 AND NOT s.abandoned
            ORDER BY s.ended_at"""
     ).fetchall()
     tracking_start = db.get_meta(conn, "tracking_start", "")
@@ -169,7 +169,7 @@ def clear_level(conn) -> dict | None:
     rows = conn.execute(
         """SELECT s.passed, s.mods, a.stars, a.attrs FROM scores s
            JOIN map_attrs a ON a.beatmap_id = s.beatmap_id AND a.mods_key = s.mods_key
-           WHERE s.countable = 1 AND s.source IN ('recent', 'lazer_local')"""
+           WHERE s.countable = 1 AND NOT s.abandoned AND s.source IN ('recent', 'lazer_local')"""
     ).fetchall()
     points = [(r["stars"], json.loads(r["attrs"]).get("hp", HP_REF), 1.0 if r["passed"] else 0.0) for r in rows
               if not ({m["acronym"] for m in json.loads(r["mods"])} & EASY_MODS)]

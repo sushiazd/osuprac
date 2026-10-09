@@ -1,10 +1,12 @@
 """Base SQLite locale : scores, attributs des maps, notes et paliers."""
 import json
 import os
+import shutil
 import sqlite3
 import time
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
+from pathlib import Path
 
 from .config import BACKUP_DIR, DATA_DIR, DB_PATH
 
@@ -114,6 +116,14 @@ CREATE TABLE IF NOT EXISTS replay_stats (
     version INTEGER
 );
 
+-- pp de chaque partie selon le calcul officiel d'osu! (voir ppcalc.py), refaits quand le calcul change.
+CREATE TABLE IF NOT EXISTS score_pp (
+    score_id INTEGER PRIMARY KEY,
+    engine TEXT,
+    pp REAL, aim REAL, speed REAL, accuracy REAL, reading REAL, flashlight REAL,
+    exact INTEGER
+);
+
 CREATE TABLE IF NOT EXISTS session_plan (
     day TEXT,
     pos INTEGER,
@@ -132,6 +142,11 @@ ADDED_COLUMNS = [
     ("session_plan", "p", "REAL"),
     ("session_plan", "minutes", "REAL"),
     ("session_plan", "share", "REAL"),
+    ("scores", "stats", "TEXT"),  # statistiques complètes au format API (fins de sliders...), pour le calcul des pp
+    # Partie quittée volontairement (Échap, relance) : osu! l'enregistre comme un fail, mais on ne meurt pas avec
+    # si peu de miss. Elle ne compte ni dans les notes, ni dans les prévisions, ni dans la séance du jour.
+    ("scores", "abandoned", "INTEGER GENERATED ALWAYS AS (passed = 0 AND source != 'inferred_fail' AND "
+                            "n_miss <= max(2, 0.02 * (n_great + n_ok + n_meh + n_miss))) VIRTUAL"),
 ]
 
 
@@ -142,7 +157,7 @@ def connect(path=None) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(SCHEMA)
     for table, column, decl in ADDED_COLUMNS:
-        if column not in {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}:
+        if column not in {r["name"] for r in conn.execute(f"PRAGMA table_xinfo({table})")}:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
     return conn
 
@@ -157,7 +172,7 @@ def daily_backup(conn, folder=BACKUP_DIR, keep: int = BACKUPS_KEPT) -> bool:
     dernières. Le fichier est écrit à côté puis renommé : OneDrive ne voit jamais une copie à moitié écrite."""
     folder.mkdir(parents=True, exist_ok=True)
     target = folder / f"osu-{date.today().isoformat()}.sqlite"
-    if target.exists():
+    if target.exists() or not is_healthy(conn):  # ne jamais remplacer une bonne sauvegarde par une base abîmée
         return False
     tmp = target.with_suffix(".tmp")
     out = sqlite3.connect(tmp)
@@ -167,6 +182,51 @@ def daily_backup(conn, folder=BACKUP_DIR, keep: int = BACKUPS_KEPT) -> bool:
     for old in sorted(folder.glob("osu-????-??-??.sqlite"))[:-keep]:
         old.unlink()
     return True
+
+
+def is_healthy(conn) -> bool:
+    try:
+        return conn.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+    except sqlite3.DatabaseError:
+        return False
+
+
+def repair_if_corrupt(path=None, folder=BACKUP_DIR, log=print) -> bool:
+    """Base abîmée (coupure de courant, disque plein…) : on en garde une copie et on la remplace par la dernière
+    sauvegarde saine. La synchronisation qui suit récupère auprès d'osu! les parties jouées depuis.
+    Renvoie True si la base a été restaurée.
+
+    La restauration passe par SQLite (pas de fichiers déplacés) : sûre même si le tableau de bord est ouvert.
+    Sans sauvegarde saine, on ne touche à rien : mieux vaut une base en partie lisible que plus de base du tout.
+    """
+    path = Path(path or DB_PATH)
+    if not path.exists():
+        return False
+    conn = sqlite3.connect(path, timeout=30)
+    try:
+        if is_healthy(conn):
+            return False
+        for backup in sorted(Path(folder).glob("osu-????-??-??.sqlite"), reverse=True):
+            src = sqlite3.connect(f"file:{backup}?mode=ro", uri=True)
+            try:
+                if not is_healthy(src):
+                    continue
+                aside = path.parent / f"abimee-{datetime.now():%Y%m%d-%H%M%S}"
+                aside.mkdir()
+                for suffix in ("", "-wal"):
+                    part = path.with_name(path.name + suffix)
+                    if part.exists():
+                        shutil.copy2(part, aside / part.name)
+                src.backup(conn)
+            finally:
+                src.close()
+            log(f"Base de données abîmée : restaurée depuis la sauvegarde {backup.name} (une copie de l'ancienne "
+                f"est gardée dans {aside.name}). Les parties jouées depuis reviennent avec cette synchronisation.")
+            return True
+        log("Base de données abîmée et aucune sauvegarde saine : rien n'a été modifié.")
+        return False
+    finally:
+        conn.close()
 
 
 class SyncBusy(RuntimeError):
