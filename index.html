@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>osu! progression</title>
+<meta name="description" content="Outil gratuit pour osu! lazer : une note par compétence, une séance d'entraînement chaque jour et des paliers à valider.">
+<link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  /* Mêmes couleurs que le tableau de bord (.streamlit/config.toml) : fond neutre, une seule couleur d'accent. */
+  :root {
+    --accent: #ff5fa2;
+    --accent-ink: #1a0610;
+    --bg: #111114;
+    --surface: #18181d;
+    --surface-2: #1f1f25;
+    --line: #27272e;
+    --text: #ececf1;
+    --muted: #8b8b96;
+    --faint: #5c5c66;
+    --good: #45c98b;
+    --orange: #e8a33d;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 400 16px/1.6 Inter, "Segoe UI", system-ui, sans-serif;
+  }
+  a { color: inherit; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 16px; }
+
+  header { display: flex; align-items: center; justify-content: space-between; height: 72px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; text-decoration: none; }
+  .brand img { width: 28px; height: 28px; }
+  .nav-link { color: var(--muted); text-decoration: none; font-size: 15px; }
+  .nav-link:hover { color: var(--text); }
+
+  .hero { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 56px; align-items: center; padding: 56px 0 80px; }
+  h1 { font-size: clamp(32px, 5vw, 46px); line-height: 1.12; letter-spacing: -0.02em; margin: 0 0 18px; font-weight: 700; }
+  h1 em { font-style: normal; color: var(--accent); }
+  .lead { color: var(--muted); font-size: 18px; margin: 0 0 32px; max-width: 34em; }
+  .actions { display: flex; flex-wrap: wrap; gap: 12px; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px; height: 46px; padding: 0 20px;
+    border-radius: 10px; font-weight: 600; font-size: 15px; text-decoration: none; border: 1px solid var(--line);
+  }
+  .btn svg { width: 18px; height: 18px; flex: none; }
+  .btn-primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .btn-primary:hover { background: #ff7ab2; }
+  .btn-ghost:hover { background: var(--surface); }
+  .req { margin: 20px 0 0; color: var(--faint); font-size: 14px; }
+
+  /* Aperçu de la séance du jour (exemple) */
+  .preview { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 20px; }
+  .label { font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+  .preview-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 14px; }
+  .preview-head span:last-child { color: var(--faint); font-size: 13px; }
+  .item { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; padding: 12px 0; border-top: 1px solid var(--line); }
+  .item:first-of-type { border-top: 0; padding-top: 0; }
+  .item-title { font-weight: 500; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .item-sub { grid-column: 1; color: var(--muted); font-size: 13px; }
+  .item-chance { grid-row: 1 / span 2; grid-column: 2; align-self: center; text-align: right; font-size: 13px; color: var(--muted); }
+  .item-chance b { display: block; color: var(--text); font-size: 16px; font-weight: 600; }
+  .tag { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 6px; margin-right: 6px;
+    background: var(--surface-2); color: var(--muted); border: 1px solid var(--line); }
+  .tag.on { color: var(--accent); border-color: rgba(255, 95, 162, 0.35); }
+  .done .item-title { color: var(--muted); }
+  .done .item-chance b { color: var(--good); }
+  .skills { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 16px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+  .skill { font-size: 13px; color: var(--muted); }
+  .skill b { color: var(--text); font-weight: 600; margin-left: 4px; }
+  .bar { height: 4px; border-radius: 4px; background: var(--line); margin-top: 6px; overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--muted); }
+  .bar i.weak { background: var(--accent); }
+
+  section { padding: 72px 0; border-top: 1px solid var(--line); }
+  h2 { font-size: 26px; letter-spacing: -0.01em; margin: 0 0 8px; font-weight: 600; }
+  .section-lead { color: var(--muted); margin: 0 0 36px; }
+
+  .features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .feature { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 20px; }
+  .feature h3 { margin: 0 0 6px; font-size: 16px; font-weight: 600; }
+  .feature p { margin: 0; color: var(--muted); font-size: 15px; }
+
+  .steps { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; counter-reset: step; max-width: 760px; }
+  .steps li { display: grid; grid-template-columns: 36px 1fr; gap: 14px; counter-increment: step;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; }
+  .steps li::before { content: counter(step); width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--accent);
+    color: var(--accent); font-weight: 700; font-size: 14px; display: flex; align-items: center; justify-content: center; }
+  .steps b { display: block; font-weight: 600; margin-bottom: 2px; }
+  .steps span { color: var(--muted); font-size: 15px; }
+  .steps a { color: #ff8cbd; text-decoration: none; }
+  .steps a:hover { text-decoration: underline; }
+  code { font-family: "JetBrains Mono", Consolas, monospace; font-size: 0.9em; background: var(--surface-2);
+    border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; color: var(--text); }
+  .note { margin: 24px 0 0; color: var(--muted); font-size: 15px; max-width: 760px; }
+
+  footer { border-top: 1px solid var(--line); padding: 28px 0 40px; color: var(--faint); font-size: 14px; }
+  footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 24px; justify-content: space-between; }
+
+  @media (max-width: 860px) {
+    .hero { grid-template-columns: 1fr; gap: 40px; padding: 32px 0 56px; }
+    .features { grid-template-columns: 1fr 1fr; }
+  }
+  @media (max-width: 560px) {
+    .features { grid-template-columns: 1fr; }
+    .btn { flex: 1 1 100%; justify-content: center; }
+    .skills { grid-template-columns: repeat(2, 1fr); }
+    section { padding: 56px 0; }
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <a class="brand" href="./"><img src="assets/icon.svg" alt="">osu! progression</a>
+    <a class="nav-link" href="https://github.com/sushiazd/osuprac">GitHub</a>
+  </header>
+
+  <div class="hero">
+    <div>
+      <h1>Progresse sur osu! en travaillant <em>tes points faibles</em>.</h1>
+      <p class="lead">Un outil gratuit pour osu! lazer. Il note tes 6 compétences, te prépare une séance à ta mesure chaque jour et te fait valider des paliers.</p>
+      <div class="actions">
+        <a class="btn btn-primary" href="https://github.com/sushiazd/osuprac/archive/refs/heads/main.zip">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m0 0l-5-5m5 5l5-5M4 19h16"/></svg>
+          Télécharger pour Windows
+        </a>
+        <a class="btn btn-ghost" href="#installation">Comment l'installer</a>
+      </div>
+      <p class="req">Windows · osu! lazer · Python 3.12 · gratuit et open source</p>
+    </div>
+
+    <div class="preview" aria-label="Exemple de séance du jour">
+      <div class="preview-head"><span class="label">Séance du jour</span><span>Exemple · 45 min</span></div>
+      <div class="item done">
+        <div class="item-title">Échauffement · 2,9★</div>
+        <div class="item-sub"><span class="tag">Aim</span>Faite</div>
+        <div class="item-chance"><b>✓</b></div>
+      </div>
+      <div class="item">
+        <div class="item-title">Travail ciblé · 3,4★</div>
+        <div class="item-sub"><span class="tag on">Speed</span>80 % de précision, 4 miss max</div>
+        <div class="item-chance"><b>52 %</b>de chances</div>
+      </div>
+      <div class="item">
+        <div class="item-title">Montée · 3,9★</div>
+        <div class="item-sub"><span class="tag">Stamina</span>La finir avec 12 miss max</div>
+        <div class="item-chance"><b>61 %</b>de chances</div>
+      </div>
+      <div class="item">
+        <div class="item-title">Défi · 4,2★</div>
+        <div class="item-sub"><span class="tag">Reading</span>La finir</div>
+        <div class="item-chance"><b>38 %</b>de chances</div>
+      </div>
+      <div class="skills">
+        <div class="skill">Aim<b>3,5★</b><div class="bar"><i style="width:70%"></i></div></div>
+        <div class="skill">Speed<b>3,0★</b><div class="bar"><i class="weak" style="width:52%"></i></div></div>
+        <div class="skill">Stamina<b>3,3★</b><div class="bar"><i style="width:63%"></i></div></div>
+        <div class="skill">Accuracy<b>3,2★</b><div class="bar"><i style="width:60%"></i></div></div>
+        <div class="skill">Reading<b>3,4★</b><div class="bar"><i style="width:66%"></i></div></div>
+        <div class="skill">Tech<b>3,1★</b><div class="bar"><i style="width:56%"></i></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<section>
+  <div class="wrap">
+    <h2>Ce que fait l'outil</h2>
+    <p class="section-lead">Tout se calcule sur tes propres parties, synchronisées toutes seules.</p>
+    <div class="features">
+      <div class="feature"><h3>Une note par compétence</h3><p>Aim, Speed, Stamina, Accuracy, Reading et Tech, en étoiles. Tu vois ce qui te freine vraiment.</p></div>
+      <div class="feature"><h3>La séance du jour</h3><p>Des maps à la bonne difficulté, surtout sur tes points faibles, dans le temps que tu as.</p></div>
+      <div class="feature"><h3>Des paliers à valider</h3><p>3 maps par palier et par compétence, puis un examen pour passer au rang suivant.</p></div>
+      <div class="feature"><h3>Tes pp, en détail</h3><p>pp et étoiles calculés avec le code officiel d'osu!, et les maps qui t'en rapporteraient le plus.</p></div>
+      <div class="feature"><h3>Suivi en direct</h3><p>À la fin de chaque partie dans lazer, la map se coche et la suivante s'affiche.</p></div>
+      <div class="feature"><h3>Analyse des replays</h3><p>Ta précision au clic : trop tôt, trop tard, et si tes miss viennent de l'aim ou du rythme.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="installation">
+  <div class="wrap">
+    <h2>Installation</h2>
+    <p class="section-lead">Une seule fois, environ 5 minutes.</p>
+    <ol class="steps">
+      <li><div><b>Installe Python 3.12</b><span>Sur <a href="https://www.python.org/downloads/">python.org</a>, en cochant <strong>Add python.exe to PATH</strong>. Installe aussi <a href="https://nodejs.org">Node.js</a> (LTS) pour que l'outil lise tes parties lazer, fails compris.</span></div></li>
+      <li><div><b>Télécharge et décompresse l'outil</b><span><a href="https://github.com/sushiazd/osuprac/archive/refs/heads/main.zip">Le fichier ZIP</a>, à décompresser dans un dossier au chemin court, par exemple <code>C:\osu-progression</code>.</span></div></li>
+      <li><div><b>Crée ta clé API osu!</b><span>Sur <a href="https://osu.ppy.sh/home/account/edit#oauth">ton compte osu!</a>, section OAuth, « Nouvelle application OAuth ». N'importe quel nom, et <code>http://localhost</code> comme URL de rappel.</span></div></li>
+      <li><div><b>Lance <code>lancer.bat</code></b><span>La première fois, il installe tout et ouvre le fichier <code>.env</code> : colle ton ID client, ton secret et ton pseudo, enregistre, puis relance-le. Le tableau de bord s'ouvre dans ton navigateur.</span></div></li>
+    </ol>
+    <p class="note">L'outil tourne sur ton PC : tes données et ta clé API restent chez toi. Optionnel : <code>activer-synchro-auto.bat</code> synchronise tes parties toutes les heures, même tableau de bord fermé.</p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>Outil non officiel, sans lien avec osu! ni ppy.</span>
+    <a class="nav-link" href="https://github.com/sushiazd/osuprac">Code source et documentation complète</a>
+  </div>
+</footer>
+
+</body>
+</html>
