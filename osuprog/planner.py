@@ -13,7 +13,8 @@ Principes (tirés de la recherche sur l'apprentissage et de la façon dont osu! 
 4. Rejouer les maps ratées récemment (répétition ciblée), éviter celles déjà réussies
    et celles sur lesquelles on s'acharne sans progrès.
 5. Séance structurée dans un budget de temps : échauffement, travail ciblé, montée, défi, révision.
-6. Pousser sa limite : environ un tiers de la séance se joue près de ton niveau de passe (« Montée »). Les objectifs
+6. Pousser sa limite : environ un tiers de la séance se joue près de ton niveau de passe (« Montée », à finir
+   proprement : au plus 8 % de miss). Les objectifs
    de précision imposent des maps bien plus faciles que celles que tu finis ; sans ce bloc, on ne s'entraînait
    jamais là où le niveau (et les pp) progressent.
 
@@ -30,9 +31,9 @@ from datetime import datetime, timedelta
 from . import db, fmt, model, pp, progression
 from .model import CALIBRATED_GAMES, DEFAULT_CLEAR_SCALE
 from .rating import HP_REF, effective_stars
-from .skills import CATEGORIES, CRITERIA, LABELS
+from .skills import CATEGORIES, CLEAN_FINISH, CRITERIA, LABELS
 
-PLAN_FORMAT = 19               # à incrémenter quand l'algorithme change
+PLAN_FORMAT = 20               # à incrémenter quand l'algorithme change
 # intensité -> (chances de FINIR la map visées, chances d'atteindre l'OBJECTIF de précision visées)
 # « équilibré » est le réglage le plus robuste en simulation (meilleure moyenne et meilleur pire cas
 # sous quatre hypothèses d'apprentissage, voir tools/simulate_training.py).
@@ -49,10 +50,20 @@ MAX_TESTS = 2
 MAX_PER_CREATOR = 2
 PLAN_FINISH_FLOOR = 0.25      # on ne propose pas de map que tu as très peu de chances de finir
 CLIMB_SHARE = 0.35            # part de la séance jouée près de ta limite (« Montée »)
-CLIMB_FINISH, CLIMB_WIDTH = 0.62, 0.15  # … sur des maps que tu finis environ 6 fois sur 10
+CLIMB_FINISH, CLIMB_WIDTH = 0.62, 0.15  # … sur des maps que tu finis proprement environ 6 fois sur 10
 CLIMB_MAX_ABOVE = 0.35        # … sans dépasser ton niveau de passe de plus de 0,35★
 DRIFT_TOLERANCE = 0.30        # une map d'entraînement prévue est remplacée si ses chances s'écartent de plus de 30 pts
 WARM_MIN_P, WARM_MIN_FINISH = 0.65, 0.85  # échauffement : objectif probable, map finie presque à coup sûr
+# Zone de confort : les réglages (AR, CS, HP) que tu supportes, mesurés sur les maps que tu as réellement finies.
+# Au-delà, une map reste possible mais passe après les autres (jamais interdite). Sur tes parties, à 3-4★ tu finis
+# ~85 % des maps normales mais seulement ~60 % de celles à HP 6+ ou CS 4,5+.
+COMFORT_MARGIN = {"ar": 0.5, "cs": 0.3, "hp": 0.25}   # tolérance au-dessus du 90e centile de tes maps finies
+COMFORT_FLOOR = {"ar": 8.0, "cs": 4.0, "hp": 5.0}     # seuil minimal, quand tu n'as pas encore beaucoup joué
+COMFORT_SCALE = {"ar": 1.0, "cs": 0.5, "hp": 1.5}     # dépassement qui compte pour « 1 unité » de pénalité
+COMFORT_STRENGTH = 0.5
+COMFORT_MIN_MAPS = 20          # en dessous, pas assez de maps finies pour définir une zone de confort
+DISLIKE_STRENGTH = 0.3         # une map écartée à ta demande baisse d'autant (au plus) ses sosies
+MIN_COMFORT_FACTOR = 0.35
 CAND_BELOW, CAND_ABOVE = 2.0, 1.5  # maps candidates : de 2★ sous ta compétence la plus faible à 1,5★ au-dessus de la plus forte
 
 
@@ -70,6 +81,10 @@ class Cand:
     favourites: int = 0
     hp: float = HP_REF
     pp_fc: tuple | None = None   # pp d'un full combo aux précisions de ppcalc.FC_ACCURACIES (maps qui rapportent des pp)
+    ar: float | None = None
+    cs: float | None = None
+    od: float | None = None
+    bpm: float | None = None
 
 
 @dataclass
@@ -91,6 +106,7 @@ class Context:
     seed: str = ""
     calib: tuple = (0.0, 1.0)
     clear_level: float | None = None
+    clean: dict | None = None     # niveau où tu finis une map proprement (rating.clear_level(clean=True))
     clear_scale: float = DEFAULT_CLEAR_SCALE
     hp_k: float = 0.0            # étoiles de difficulté par point de HP pour finir une map
     load2d: dict = field(default_factory=dict)   # sollicitation de chaque compétence ces 48 h
@@ -105,6 +121,8 @@ class Context:
     levels: dict | None = None    # notes au critère commun : pour comparer les compétences (défaut : ratings)
     typical_acc: float = 0.9      # ta précision habituelle (pp d'une map en full combo)
     top_pp: float = 0.0           # ta meilleure partie en pp
+    comfort: dict = field(default_factory=dict)   # {"ar": .., "cs": .., "hp": ..} : seuils au-delà desquels une map gêne
+    dislikes: list = field(default_factory=list)  # réglages des maps que tu as écartées à ta demande
 
 
 @dataclass
@@ -121,7 +139,7 @@ class Item:
 
 # --- Briques ---------------------------------------------------------------------------------
 
-FINISH_ROLES = ("Défi", "Montée")  # leur but est de finir la map : on affiche et on vise leurs chances de la finir
+FINISH_ROLES = ("Défi", "Montée")  # leur but est de finir la map (proprement pour la Montée) : on affiche ces chances
 
 
 def fc_pp_at(values, accuracy: float) -> float:
@@ -131,6 +149,34 @@ def noise(seed: str, key) -> float:
     """Bruit déterministe dans [-1, 1] : même jour = même séance, jours différents = variété."""
     h = hashlib.blake2b(f"{seed}:{key}".encode(), digest_size=4).digest()
     return int.from_bytes(h, "big") / 2 ** 32 * 2 - 1
+
+
+def is_gimmick(c: Cand) -> bool:
+    """Maps blagues aux réglages absurdes (AR 0, cercles géants…) : inutiles pour s'entraîner, même si elles sont classées."""
+    return (c.ar is not None and c.ar < 1.0) or (c.cs is not None and c.cs < 1.5)
+
+
+def comfort_factor(c: Cand, comfort: dict, dislikes: list) -> float:
+    """Entre MIN_COMFORT_FACTOR et 1 : 1 = dans ta zone de confort et loin des maps que tu as écartées.
+
+    Pénalise les maps dont l'AR, le CS ou le HP dépassent ce que tu finis d'habitude, et celles qui ressemblent aux
+    maps que tu as retirées (mêmes réglages, même compétence dominante). Une préférence, jamais une interdiction.
+    """
+    excess = 0.0
+    for key, value in (("ar", c.ar), ("cs", c.cs), ("hp", c.hp)):
+        if value is not None and key in comfort:
+            excess += max(0.0, value - comfort[key]) / COMFORT_SCALE[key]
+    factor = 1.0 / (1.0 + COMFORT_STRENGTH * excess)
+    if dislikes and c.weights:
+        dominant = max(c.weights, key=c.weights.get)
+        for d in dislikes:
+            dist = ((abs(c.ar - d["ar"]) / 1.5 if c.ar is not None and d.get("ar") is not None else 0.0)
+                    + (abs(c.cs - d["cs"]) / 0.7 if c.cs is not None and d.get("cs") is not None else 0.0)
+                    + abs(c.hp - d["hp"]) / 2.0
+                    + (abs(c.bpm - d["bpm"]) / 25 if c.bpm is not None and d.get("bpm") is not None else 0.0)
+                    + (0.0 if dominant == d.get("skill") else 1.0))
+            factor *= 1.0 - DISLIKE_STRENGTH * max(0.0, 1.0 - dist / 4.0)
+    return max(MIN_COMFORT_FACTOR, factor)
 
 
 def freshness(h: History) -> float:
@@ -236,7 +282,13 @@ def plan(ctx: Context, cands: list[Cand]) -> tuple[list[Item], dict]:
             return None
         return model.finish_prob(c.stars, c.hp, ctx.clear_level, ctx.clear_scale, ctx.hp_k)
 
-    cands = [c for c in cands if c.beatmap_id not in ctx.exclude
+    def p_clean_of(c: Cand) -> float | None:
+        """Chances de la finir proprement (au plus 8 % de miss) ; à défaut de mesure, de la finir tout court."""
+        if ctx.clean is None:
+            return p_finish_of(c)
+        return model.finish_prob_for(ctx.clean, c.stars, c.hp)
+
+    cands = [c for c in cands if c.beatmap_id not in ctx.exclude and not is_gimmick(c)
              and ctx.level - 1.6 <= c.stars <= ctx.level + 1.3 and c.length_s > 0
              and (p_finish_of(c) is None or p_finish_of(c) >= PLAN_FINISH_FLOOR)]
     shares, parts = skill_shares(ctx, cands)
@@ -263,7 +315,12 @@ def plan(ctx: Context, cands: list[Cand]) -> tuple[list[Item], dict]:
 
     def take(c: Cand, role: str, skill: str, level_c: int | None = None) -> Item:
         # Le défi a pour but de FINIR la map : on affiche donc ses chances de la finir, pas celles de l'objectif.
-        p = p_finish_of(c) if role in FINISH_ROLES and ctx.clear_level is not None else p_cache[c.beatmap_id]
+        if role == "Montée":
+            p = p_clean_of(c)
+        elif role == "Défi" and ctx.clear_level is not None:
+            p = p_finish_of(c)
+        else:
+            p = p_cache[c.beatmap_id]
         tier = ctx.tier_open.get(c.beatmap_id)
         item = Item(
             role=role, category=skill,
@@ -281,9 +338,13 @@ def plan(ctx: Context, cands: list[Cand]) -> tuple[list[Item], dict]:
             load[s] += w
         return item
 
+    comfort: dict[int, float] = {}
+
     def base(c: Cand) -> float:
+        if c.beatmap_id not in comfort:
+            comfort[c.beatmap_id] = comfort_factor(c, ctx.comfort, ctx.dislikes)
         return (model.quality(c.playcount, c.favourites) * model.duration_factor(c.length_s, c.weights.get("stamina", 0))
-                * freshness(hist(c)) * (1 + 0.10 * noise(ctx.seed, c.beatmap_id)))
+                * freshness(hist(c)) * (1 + 0.10 * noise(ctx.seed, c.beatmap_id)) * comfort[c.beatmap_id])
 
     B = ctx.budget_min
     warm_budget = 0.0 if ctx.warmed_up else 0.08 * B
@@ -359,13 +420,13 @@ def plan(ctx: Context, cands: list[Cand]) -> tuple[list[Item], dict]:
         if c.pp_fc and ctx.top_pp > 0:  # une map dont le full combo entrerait haut dans ton top vaut plus
             gain = min(1.5, max(0.7, fc_pp_at(c.pp_fc, ctx.typical_acc) / ctx.top_pp))
         minutes = model.minutes_for(c.length_s, attempts_expected("Montée", 0.6))
-        return skills * model.bump(p_finish_of(c), CLIMB_FINISH, CLIMB_WIDTH) * base(c) * gain / math.sqrt(minutes)
+        return skills * model.bump(p_clean_of(c), CLIMB_FINISH, CLIMB_WIDTH) * base(c) * gain / math.sqrt(minutes)
 
     climb_minutes = lambda: sum(i.minutes for i in chosen if i.role == "Montée")  # noqa: E731
     if climb_budget:
         # Plafond d'étoiles : une map très au-dessus de ton niveau mais « facile à finir » grâce à une jauge de vie
         # très basse n'apprend rien de plus, on la joue sans rien contrôler.
-        pool = [c for c in cands if c.length_s <= 300 and 0.35 <= p_finish_of(c) <= 0.85
+        pool = [c for c in cands if c.length_s <= 300 and 0.35 <= p_clean_of(c) <= 0.85
                 and c.stars <= ctx.clear_level + CLIMB_MAX_ABOVE]
         while climb_minutes() < climb_budget - 1.5:
             ranked = sorted((c for c in pool if usable(c)), key=climb_value, reverse=True)
@@ -448,7 +509,40 @@ def load_candidates(conn, window: tuple[float, float] = (0.0, 99.0)) -> list[Can
         out.append(Cand(r["beatmap_id"], r["beatmapset_id"] or 0, r["creator"] or "", r["stars"],
                         json.loads(r["weights"]), attrs.get("length_s") or 0.0, r["playcount"] or 0,
                         r["favourites"] or 0, attrs.get("hp", HP_REF),
-                        tuple(attrs["pp_fc"]) if attrs.get("pp_fc") and r["status"] in pp.PP_STATUSES else None))
+                        tuple(attrs["pp_fc"]) if attrs.get("pp_fc") and r["status"] in pp.PP_STATUSES else None,
+                        attrs.get("ar"), attrs.get("cs"), attrs.get("od"), attrs.get("bpm")))
+    return out
+
+
+def comfort_zone(conn) -> dict:
+    """Seuils d'AR, de CS et de HP au-delà desquels tu finis moins de maps : le 90e centile des maps que tu as déjà
+    finies, plus une marge. Vide tant que tu n'as pas fini assez de maps."""
+    attrs_by_map = {}
+    for r in conn.execute(
+        """SELECT s.beatmap_id, a.attrs FROM scores s JOIN map_attrs a ON a.beatmap_id = s.beatmap_id AND a.mods_key = s.mods_key
+           WHERE s.passed = 1 AND s.mods_key = '' AND s.source != 'inferred_fail' AND s.countable = 1"""):
+        attrs_by_map[r["beatmap_id"]] = json.loads(r["attrs"])
+    if len(attrs_by_map) < COMFORT_MIN_MAPS:
+        return {}
+    zone = {}
+    for key in COMFORT_MARGIN:
+        values = sorted(a[key] for a in attrs_by_map.values() if a.get(key) is not None)
+        if values:
+            p90 = values[min(len(values) - 1, int(0.9 * len(values)))]
+            zone[key] = max(COMFORT_FLOOR[key], p90 + COMFORT_MARGIN[key])
+    return zone
+
+
+def dislike_profiles(conn, ignored: set) -> list[dict]:
+    """Réglages (AR, CS, HP, BPM, compétence dominante) des maps que tu as écartées à ta demande."""
+    out = []
+    for bid in ignored:
+        row = conn.execute("SELECT weights, attrs FROM map_attrs WHERE beatmap_id = ? AND mods_key = ''", (bid,)).fetchone()
+        if not row:
+            continue
+        attrs, weights = json.loads(row["attrs"]), json.loads(row["weights"])
+        out.append({"ar": attrs.get("ar"), "cs": attrs.get("cs"), "hp": attrs.get("hp", HP_REF),
+                    "bpm": attrs.get("bpm"), "skill": max(weights, key=weights.get) if weights else None})
     return out
 
 
@@ -543,11 +637,13 @@ def build_context(conn, ratings: dict, day: str, exclude: set, cands: list[Cand]
         target_finish=INTENSITY[cfg["intensity"]][0], target_meet=INTENSITY[cfg["intensity"]][1],
         seed=f"{day}-{variant}", calib=model.load_calibration(conn),
         clear_level=clear["level"] if clear else None, clear_scale=(clear or {}).get("scale", DEFAULT_CLEAR_SCALE),
+        clean=db.get_meta(conn, "clean_level"),
         hp_k=(clear or {}).get("hp_k", 0.0),
         load2d=l2, load7d=l7, history=load_history(conn, cands, day),
         tier_open=tier_open, exam=exam, exam_level_c=state["target_c"], exclude=set(exclude),
         levels={s: ratings[s].get("level", ratings[s]["rating"]) for s in CATEGORIES},
         typical_acc=pp.typical_accuracy(conn), top_pp=(pp.best_scores(conn) or [{"pp": 0.0}])[0]["pp"],
+        comfort=comfort_zone(conn), dislikes=dislike_profiles(conn, progression.ignored_maps(conn)),
     )
 
 
@@ -663,9 +759,10 @@ def model_fingerprint(conn, ratings: dict) -> list:
     """Ce qui fait bouger les chances des maps : tes notes, le recalage et ton niveau de passe (arrondis, pour ne pas
     tout recalculer pour un rien)."""
     clear = db.get_meta(conn, "clear_level") or {}
+    clean = db.get_meta(conn, "clean_level") or {}
     a, b = model.load_calibration(conn)
     return ([round(ratings[s]["rating"], 1) for s in CATEGORIES if s in ratings]
-            + [round(a, 1), round(b, 1), round(clear.get("level", 0), 1)])
+            + [round(a, 1), round(b, 1), round(clear.get("level", 0), 1), round(clean.get("level", 0), 1)])
 
 
 def still_fits(role: str, p_meet: float, p_finish: float | None, target_meet: float) -> bool:
@@ -690,6 +787,7 @@ def refresh_pending(conn, ratings: dict, cfg: dict, rows) -> list[dict]:
         f"SELECT beatmap_id, stars, weights, attrs FROM map_attrs WHERE mods_key = '' AND beatmap_id IN "
         f"({','.join('?' * len(ids))})", ids)}
     clear = db.get_meta(conn, "clear_level")
+    clean = db.get_meta(conn, "clean_level") or clear
     calib = model.load_calibration(conn)
     current = {s: v["rating"] for s, v in ratings.items()}
     target_meet = INTENSITY[cfg["intensity"]][1]
@@ -702,7 +800,7 @@ def refresh_pending(conn, ratings: dict, cfg: dict, rows) -> list[dict]:
         attrs = json.loads(m["attrs"])
         hp = attrs.get("hp", HP_REF)
         p_meet = model.p_map(json.loads(m["weights"]), current, effective_stars(m["stars"], hp), calib)
-        p_finish = model.finish_prob_for(clear, m["stars"], hp)
+        p_finish = model.finish_prob_for(clean if item["role"] == "Montée" else clear, m["stars"], hp)
         if not still_fits(item["role"], p_meet, p_finish, target_meet):
             continue
         item["p"] = p_finish if item["role"] in FINISH_ROLES and p_finish is not None else p_meet
@@ -715,11 +813,12 @@ def _played_today(conn, beatmap_id: int, day: str) -> bool:
     return bool(progression.played_on(conn, beatmap_id, day))
 
 
-def ignore_map(conn, beatmap_id: int, day: str) -> None:
+def ignore_map(conn, beatmap_id: int, day: str, drop_played: bool = False) -> None:
     """« Ne plus me proposer cette map » : elle sort du programme (et des paliers) ; une autre est ajoutée en fin
-    de liste au prochain affichage. Déjà jouée aujourd'hui, elle reste dans les maps terminées."""
+    de liste au prochain affichage. Réussie aujourd'hui, elle reste dans les maps terminées ; seulement essayée
+    (à retenter), elle sort aussi de la liste si `drop_played`."""
     progression.ignore_map(conn, beatmap_id)
-    if not _played_today(conn, beatmap_id, day):
+    if drop_played or not _played_today(conn, beatmap_id, day):
         conn.execute("DELETE FROM session_plan WHERE day = ? AND beatmap_id = ?", (day, beatmap_id))
     conn.commit()
 
@@ -737,13 +836,13 @@ def forecast_check(conn, today: str, days: int = 14) -> dict:
         (today, since)).fetchall()
     n = met = predicted = 0.0
     for r in rows:
-        if r["role"] in ("Échauffement", "Test de niveau") + FINISH_ROLES:  # elles prévoient de finir
+        if r["role"] in ("Échauffement", "Test de niveau", "Défi"):  # le défi prévoit de finir, sans objectif
             continue
         plays = progression.played_on(conn, r["beatmap_id"], r["day"])
         if not plays:
             continue
         first = plays[-1]  # played_on : du plus récent au plus ancien
-        crit = progression.criterion_for(r["category"])
+        crit = CLEAN_FINISH if r["role"] == "Montée" else progression.criterion_for(r["category"])
         n += 1
         predicted += r["p"]
         met += progression.meets(bool(first["passed"]), first["accuracy"], first["n_miss"],

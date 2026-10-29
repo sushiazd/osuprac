@@ -132,3 +132,31 @@ def test_quitting_a_map_is_not_a_fail(conn):
     assert [p["n_miss"] for p in progression.played_on(conn, 5, "2026-10-08")] == [25]
     rating.recompute(conn)
     assert {r[0] for r in conn.execute("SELECT DISTINCT score_id FROM rating_events")} == {2}
+
+
+def test_a_climb_map_counts_only_if_finished_cleanly(conn):
+    """Montée : finie avec au plus 8 % de miss. Survivre avec 50 miss (jauge de vie basse) reste à retenter."""
+    from osuprog.ui import item_state
+    add_map(conn, 6, n_objects=300)  # 8 % de 300 = 24 miss au plus
+    day = "2026-10-11"
+    assert item_state(conn, "Montée", "aim", 6, day)[0] == "todo"
+    store_score(conn, score(1, 6, "2026-10-11T13:00:00Z", accuracy=0.57, miss=50), "recent")
+    assert item_state(conn, "Montée", "aim", 6, day)[0] == "retry"
+    store_score(conn, score(2, 6, "2026-10-11T13:10:00Z", accuracy=0.70, miss=20), "recent")
+    assert item_state(conn, "Montée", "aim", 6, day)[0] == "done"  # précision libre, peu de miss
+
+
+def test_clean_finish_level_is_below_the_finish_level(conn):
+    """Finir proprement est plus dur que survivre : son niveau est plus bas."""
+    from osuprog import rating
+    sid = 0
+    for i in range(60):
+        stars = 2.5 + (i % 20) * 0.1
+        add_map(conn, 100 + i, stars=stars, n_objects=300)
+        sid += 1
+        passed = stars < 4.0
+        misses = 5 if stars < 3.3 else 40  # au-dessus de 3,3★ : finies, mais avec beaucoup de miss
+        store_score(conn, score(sid, 100 + i, f"2026-10-0{1 + i % 9}T12:{i:02d}:00Z", miss=misses if passed else 30,
+                                passed=passed), "recent")
+    clear, clean = rating.clear_level(conn), rating.clear_level(conn, clean=True)
+    assert clean["level"] < clear["level"] - 0.4

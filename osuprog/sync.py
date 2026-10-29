@@ -204,6 +204,9 @@ def _sync(username: str | None, log, api) -> dict:
     clear = rating.clear_level(conn)
     if clear:
         db.set_meta(conn, "clear_level", clear)
+    clean = rating.clear_level(conn, clean=True)
+    if clean:
+        db.set_meta(conn, "clean_level", clean)
     model.update_calibration(conn)
     progression.retire_stuck_tier_maps(conn, log)
     progression.update(conn, api, ratings, log)

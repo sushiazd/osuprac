@@ -69,8 +69,8 @@ with st.expander("Comment les maps sont choisies"):
     st.markdown(
         f"Deux sortes de travail. **Entraînement** : des maps que tu finis environ {fmt.share(finish)} du temps, avec "
         f"{fmt.share(meet)} de chances d'atteindre l'objectif de précision, pour jouer propre. **Montée** (environ "
-        f"{fmt.share(planner.CLIMB_SHARE)} de la séance) : des maps près de ta limite, que tu finis environ "
-        f"{fmt.share(planner.CLIMB_FINISH)} du temps, de préférence celles qui rapportent des pp. Le temps est réparti "
+        f"{fmt.share(planner.CLIMB_SHARE)} de la séance) : des maps près de ta limite, que tu finis proprement "
+        f"(au plus 8 % de miss) environ {fmt.share(planner.CLIMB_FINISH)} du temps, de préférence celles qui rapportent des pp. Le temps est réparti "
         "entre les compétences selon leur retard (comparées à critère égal : 80 % de précision partout), leur place "
         "dans les maps du niveau suivant et l'incertitude de leur note (aucune ne dépasse "
         f"{fmt.share(planner.MAX_SHARE)}). Ordre : échauffement, travail ciblé, montée, défi, révision.")
@@ -89,8 +89,10 @@ with st.expander("Les types de maps"):
         "- **Échauffement** : facile, pour te mettre en route.\n"
         "- **Objectif** : une map de ton palier en cours.\n"
         "- **Entraînement** : du travail ciblé, pour jouer propre (objectif de précision).\n"
-        "- **Montée** : près de ta limite (tu la finis environ 6 fois sur 10). Environ un tiers de la séance : c'est "
-        "là que ton niveau de passe et tes pp montent. Le but est de la finir.\n"
+        "- **Montée** : près de ta limite (tu la finis proprement environ 6 fois sur 10). Environ un tiers de la "
+        "séance : c'est là que ton niveau de passe et tes pp montent. Le but : la finir avec au plus 8 % de miss, "
+        "précision libre. Survivre ne suffit pas : sur une map à jauge de vie très basse, on finit même en ratant "
+        "tout.\n"
         "- **Test de niveau** : mesure une compétence encore mal connue.\n"
         "- **Défi** : au-dessus de ton niveau, la rater est normal.\n"
         "- **Révision** : entretient une compétence peu travaillée.\n"

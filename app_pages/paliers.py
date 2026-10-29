@@ -6,7 +6,7 @@ import streamlit as st
 from osuprog import db, progression, rewards, visuals
 from osuprog.progression import STEP_C
 from osuprog.skills import CATEGORIES, CRITERIA, LABELS
-from osuprog.ui import map_card, map_info, skill_label, stars
+from osuprog.ui import map_card, map_info, requirement_line, short_goal, skill_label, stars
 
 conn = db.connect()
 today = date.today().isoformat()
@@ -52,8 +52,11 @@ with paliers_tab:
 
     if exam["unlocked"]:
         st.subheader(f"Examen du niveau {stars(target / 100)}")
+        st.markdown(f"Pour réussir l'examen : **{len(tier_maps('exam', target))} maps**, chacune en une seule partie "
+                    f"finie avec {short_goal(progression.EXAM_CRITERION, None)}.")
         for m in tier_maps("exam", target):
             map_card(conn, m["beatmap_id"], cat="exam", level_c=target, key="exam")
+            st.markdown(requirement_line(conn, m["beatmap_id"], progression.EXAM_CRITERION))
 
     st.subheader("Maps du palier")
     chosen = st.segmented_control("Compétence", [LABELS[c] for c in CATEGORIES], default=LABELS[CATEGORIES[0]],
@@ -61,10 +64,17 @@ with paliers_tab:
     cat = next(c for c in CATEGORIES if LABELS[c] == chosen)
     current = progress.get(cat, 0) + STEP_C
     maps = tier_maps(cat, current)
+    crit = CRITERIA[cat]
+    st.markdown(f"**Pour valider le palier {stars(current / 100)} en {LABELS[cat]}** : réussis les "
+                f"**{progression.MAPS_PER_TIER} maps** ci-dessous ({met_count(cat, maps)}/{progression.MAPS_PER_TIER} "
+                f"faites). Sur chacune, il faut **une seule partie finie** avec au moins **{crit.min_acc:g} % de "
+                f"précision** et au plus **{str(crit.max_miss_pct).rstrip('0').rstrip('.').replace('.', ',')} % de "
+                f"miss** (le nombre de miss autorisés dépend de la longueur de la map).")
     if not maps:
         st.caption("Pas encore de maps pour ce palier : clique sur Synchroniser.")
     for m in maps:
         map_card(conn, m["beatmap_id"], cat=cat, level_c=current, key=f"tier-{cat}")
+        st.markdown(requirement_line(conn, m["beatmap_id"], crit))
 
     retired = db.get_meta(conn, "retired_tier_maps", [])
     ignored = db.get_meta(conn, "ignored_maps", [])

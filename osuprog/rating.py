@@ -10,7 +10,7 @@ from collections import defaultdict
 
 from . import db
 from .mods import EASY_MODS
-from .skills import CATEGORIES, COMMON_CRITERION, CRITERIA, outcome
+from .skills import CATEGORIES, CLEAN_FINISH, COMMON_CRITERION, CRITERIA, meets, outcome
 
 # Raideur de la courbe « étoiles → chances de réussir » : 0,5★ au-dessus de ta note ≈ 27 % de chances.
 # Calibré en rejouant 346 parties réelles (prédiction faite avant chaque résultat) : 0,30 rendait le
@@ -171,13 +171,23 @@ def fit_clear_level(points: list[tuple]) -> dict | None:
             "scale": round(max(0.2, min(-1 / b, 1.5)), 2), "hp_k": round(max(0.0, min(c / b, 0.6)), 3)}
 
 
-def clear_level(conn) -> dict | None:
-    """Niveau de réussite (sans fail) d'après tes parties récentes, sans mod facilitant."""
+def clear_level(conn, clean: bool = False) -> dict | None:
+    """Niveau de réussite (sans fail) d'après tes parties récentes, sans mod facilitant.
+
+    clean=True : niveau où tu finis une map PROPREMENT (au plus 8 % de miss, voir skills.CLEAN_FINISH) une fois sur
+    deux. Sert aux maps « Montée ».
+    """
     rows = conn.execute(
-        """SELECT s.passed, s.mods, a.stars, a.attrs FROM scores s
+        """SELECT s.passed, s.mods, s.accuracy, s.n_miss, a.stars, a.attrs FROM scores s
            JOIN map_attrs a ON a.beatmap_id = s.beatmap_id AND a.mods_key = s.mods_key
            WHERE s.countable = 1 AND NOT s.abandoned AND s.source IN ('recent', 'lazer_local')"""
     ).fetchall()
-    points = [(r["stars"], json.loads(r["attrs"]).get("hp", HP_REF), 1.0 if r["passed"] else 0.0) for r in rows
-              if not ({m["acronym"] for m in json.loads(r["mods"])} & EASY_MODS)]
+    points = []
+    for r in rows:
+        if {m["acronym"] for m in json.loads(r["mods"])} & EASY_MODS:
+            continue
+        attrs = json.loads(r["attrs"])
+        ok = (meets(bool(r["passed"]), r["accuracy"], r["n_miss"], attrs.get("n_objects") or DEFAULT_OBJECTS,
+                    CLEAN_FINISH) if clean else bool(r["passed"]))
+        points.append((r["stars"], attrs.get("hp", HP_REF), 1.0 if ok else 0.0))
     return fit_clear_level(points)

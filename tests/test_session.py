@@ -107,3 +107,13 @@ def test_chances_follow_your_ratings_and_too_easy_maps_are_replaced(conn):
     assert all(after[b] > before[b] for b in kept)                  # chances recalculées, pas figées
     assert all(abs(p - 0.5) <= planner.DRIFT_TOLERANCE for p in after.values())  # plus de map devenue trop facile
     assert before.keys() != after.keys()
+
+
+def test_ignoring_a_map_you_tried_but_did_not_clear_removes_it_from_the_list(conn):
+    setup_pool(conn)
+    planner.build_session(conn, None, ratings(conn), DAY, log=lambda *_: None)
+    first = plan_ids(conn)[0]
+    play(conn, first, 1)
+    planner.ignore_map(conn, first, DAY, drop_played=True)
+    planner.build_session(conn, None, ratings(conn), DAY, log=lambda *_: None)
+    assert first not in plan_ids(conn)

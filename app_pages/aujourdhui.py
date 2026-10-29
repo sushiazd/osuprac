@@ -78,7 +78,7 @@ st.html(visuals.progress(played / len(items) if items else 0))
 def card(i, *, highlight=False):
     map_card(conn, i["beatmap_id"], role=i["role"], cat=i["category"], level_c=i["level_c"],
              number=items.index(i) + 1, day=day, highlight=highlight, reason=i["reason"], p=i["p"],
-             minutes=i["minutes"], ignorable=i["role"] != "Examen" and i["state"] == "todo", key="today")
+             minutes=i["minutes"], ignorable=i["role"] != "Examen" and i["state"] in ("todo", "retry"), key="today")
 
 
 todo = [i for i in items if i["state"] == "todo"]

@@ -59,6 +59,10 @@ CRITERIA = {
 EXAM_CRITERION = Criterion(80, 2)
 # Critère commun à toutes les compétences, pour les comparer entre elles (voir rating.recompute).
 COMMON_CRITERION = Criterion(80, 2)
+# But des maps « Montée » : la finir PROPREMENT, sans exigence de précision. Survivre ne suffit pas : sur une map à
+# jauge de vie très basse, on peut finir avec 17 % de miss sans l'avoir vraiment jouée. 8 % : près de ta limite, ta
+# médiane est autour de 5 % et 78 % de tes parties finies restent en dessous (mesuré le 2026-10-11).
+CLEAN_FINISH = Criterion(0, 8)
 
 
 def map_attributes(beatmap_id: int, mods: list[dict]) -> dict:

@@ -7,7 +7,7 @@ import streamlit as st
 
 from . import db, planner, pp, progression, visuals
 from .fmt import num, pct, stars  # noqa: F401  (réexportés pour les pages)
-from .skills import LABELS
+from .skills import CLEAN_FINISH, LABELS
 
 SKILL_ICONS = {
     "aim": ":material/my_location:",
@@ -49,6 +49,34 @@ def short_goal(crit, n_objects: int | None) -> str:
     return f"{crit.min_acc:g} % de précision, {misses}"
 
 
+def requirement_line(conn, beatmap_id: int, crit) -> str:
+    """Pour une map de palier ou d'examen : ce qu'il faut atteindre, ton meilleur essai et ce qu'il te manque.
+
+    La précision ET les miss doivent être atteints dans une même partie, finie.
+    """
+    n_objects = progression.n_objects_of(conn, beatmap_id)
+    allowed = crit.max_miss(n_objects)
+    goal = f"{num(crit.min_acc)} % de précision et {allowed} miss maximum"
+    best = progression.best_result(conn, beatmap_id, crit)
+    if best and best["met"]:
+        return f":green[:material/check_circle: **Validée** · {pct(best['accuracy'])} · {best['misses']} miss]"
+    if not best:
+        return f":gray[:material/radio_button_unchecked: **À faire** · une partie finie avec {goal}.]"
+    if not best["passed"]:
+        missing = "finir la map"
+        record = f"fail à {pct(best['accuracy'])} · {best['misses']} miss"
+    else:
+        gaps = []
+        if best["accuracy"] < crit.min_acc:
+            gaps.append(f"{num(round(crit.min_acc - best['accuracy'], 1))} point(s) de précision en plus")
+        if best["misses"] > allowed:
+            gaps.append(f"{best['misses'] - allowed} miss de moins")
+        missing = " et ".join(gaps) or "tout atteindre dans la même partie"
+        record = f"{pct(best['accuracy'])} · {best['misses']} miss"
+    return (f":orange[:material/flag: **À faire** · il faut {goal}.] "
+            f":gray[Ton meilleur essai : {record}. Il te manque : {missing}.]")
+
+
 def map_info(conn, beatmap_id: int) -> dict:
     row = conn.execute(
         """SELECT b.artist, b.title, b.version, b.beatmapset_id, b.status, a.stars, a.attrs
@@ -72,10 +100,10 @@ def game_link(beatmap_id: int) -> str:
     return f"osu://b/{beatmap_id}"
 
 
-def _ignore(beatmap_id: int, day: str) -> None:
+def _ignore(beatmap_id: int, day: str, drop_played: bool) -> None:
     """Rappel de bouton : il s'exécute au début du passage suivant, donc avec sa propre connexion."""
     conn = db.connect()
-    planner.ignore_map(conn, beatmap_id, day)
+    planner.ignore_map(conn, beatmap_id, day, drop_played)
     conn.close()
 
 
@@ -99,7 +127,11 @@ def goal_sentence(role: str, crit, n_objects: int | None = None) -> str:
         return "Aucun, juste te chauffer."
     if role == "Test de niveau":
         return "Joue-la normalement."
-    if role in ("Défi", "Montée"):
+    if role == "Montée":
+        limit = (f"{CLEAN_FINISH.max_miss(n_objects)} miss" if n_objects
+                 else f"{num(CLEAN_FINISH.max_miss_pct)} % de miss")
+        return f"La finir avec au plus {limit} (précision libre)."
+    if role == "Défi":
         return f"La finir. Bonus : {short_goal(crit, n_objects)}."
     return short_goal(crit, n_objects) + "."
 
@@ -112,8 +144,18 @@ def record_text(best: dict) -> str:
 
 def item_state(conn, role: str, cat: str, beatmap_id: int, day: str) -> tuple[str, str]:
     """('done' | 'retry' | 'todo', statut en clair)."""
-    crit = progression.criterion_for(cat)
+    crit = CLEAN_FINISH if role == "Montée" else progression.criterion_for(cat)
     today = progression.played_on(conn, beatmap_id, day)
+    if role == "Montée":  # réussie seulement si finie proprement aujourd'hui ; sinon, à retenter
+        n_obj = progression.n_objects_of(conn, beatmap_id)
+        clean = [p for p in today if progression.meets(bool(p["passed"]), p["accuracy"], p["n_miss"], n_obj, crit)]
+        if clean:
+            return "done", f"Réussie · {clean[0]['n_miss']} miss"
+        if today:
+            last = today[0]
+            detail = "fail" if not last["passed"] else f"{last['n_miss']} miss (max {crit.max_miss(n_obj)})"
+            return "retry", f"À retenter · dernier essai : {detail}"
+        return "todo", "À jouer"
     best = progression.best_result(conn, beatmap_id, crit)
     if role in ("Objectif", "Examen"):
         if best and best["met"]:
@@ -132,13 +174,14 @@ def item_state(conn, role: str, cat: str, beatmap_id: int, day: str) -> tuple[st
     return "todo", "À jouer"
 
 
-def _more_menu(info: dict, beatmap_id: int, day: str | None, ignorable: bool, key: str) -> None:
+def _more_menu(info: dict, beatmap_id: int, day: str | None, ignorable: bool, key: str,
+               drop_played: bool = False) -> None:
     """Menu « … » : actions secondaires d'une map."""
     with st.popover("", icon=":material/more_horiz:", type="tertiary", key=f"more-{key}-{beatmap_id}"):
         st.link_button("Page de la map", info["url"], type="tertiary", icon=":material/open_in_new:")
         if ignorable and day:
             st.button("Ne plus me proposer", key=f"ignore-{key}-{beatmap_id}", type="tertiary",
-                      icon=":material/block:", on_click=_ignore, args=(beatmap_id, day),
+                      icon=":material/block:", on_click=_ignore, args=(beatmap_id, day, drop_played),
                       help="Elle sort du programme et des paliers. Annulable dans Progression.")
 
 
@@ -154,6 +197,8 @@ def map_card(conn, beatmap_id: int, *, role: str | None = None, cat: str, level_
     crit = progression.criterion_for(cat)
     role = OLD_ROLE_NAMES.get(role, role)
     key = f"{key}-{number}" if number is not None else key
+    # Une map déjà essayée mais pas réussie (« à retenter ») sort entièrement de la liste quand on la retire.
+    drop_played = bool(role and day and ignorable and item_state(conn, role, cat, beatmap_id, day)[0] == "retry")
     if highlight:
         fc = pp.fc_pp(info["attrs"], pp.typical_accuracy(conn)) if info["status"] in pp.PP_STATUSES else None
         st.html(visuals.now_card(info, role=role, skill_label=skill_label(cat),
@@ -163,7 +208,7 @@ def map_card(conn, beatmap_id: int, *, role: str | None = None, cat: str, level_
         with st.container(horizontal=True, vertical_alignment="center", gap="small"):
             st.link_button("Ouvrir dans osu!", game_link(beatmap_id), type="primary", icon=":material/play_arrow:",
                            help="Ouvre la map dans osu! lazer, qui la télécharge si besoin.")
-            _more_menu(info, beatmap_id, day, ignorable, key)
+            _more_menu(info, beatmap_id, day, ignorable, key, drop_played)
         return
     if role and day:
         state, _ = item_state(conn, role, cat, beatmap_id, day)
@@ -177,7 +222,7 @@ def map_card(conn, beatmap_id: int, *, role: str | None = None, cat: str, level_
         st.html(visuals.map_row(info, number=number, role=role, state=state, p=p, reason=tip))
         st.link_button("", game_link(beatmap_id), type="tertiary", icon=":material/play_arrow:",
                        help="Ouvrir dans osu!")
-        _more_menu(info, beatmap_id, day, ignorable, key)
+        _more_menu(info, beatmap_id, day, ignorable, key, drop_played)
 
 
 def styled_chart(chart):

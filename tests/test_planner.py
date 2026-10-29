@@ -105,3 +105,66 @@ def test_a_stricter_objective_is_not_mistaken_for_a_weak_skill():
     shares_fair, _ = skill_shares(context(ratings=ratings, levels={s: 3.0 for s in CATEGORIES}), candidates())
     assert shares_fair["accuracy"] < shares_raw["accuracy"]
     assert max(shares_fair.values()) - min(shares_fair.values()) < 0.1
+
+
+def test_climb_chances_are_chances_to_finish_cleanly():
+    from osuprog import model
+    clean = {"level": 3.2, "scale": 0.5, "hp_k": 0.0}
+    items, _ = plan(context(clean=clean), candidates())
+    climb = [i for i in items if i.role == "Montée"]
+    assert climb
+    for i in climb:
+        c = next(c for c in candidates() if c.beatmap_id == i.beatmap_id)
+        assert abs(i.p - model.finish_prob_for(clean, c.stars, c.hp)) < 1e-9
+
+
+# --- Zone de confort et maps écartées --------------------------------------------------------
+
+def _cand(**kw) -> Cand:
+    base = dict(beatmap_id=1, set_id=1, creator="m", stars=3.5, weights={"aim": 1.0}, length_s=100, hp=4.0,
+                ar=7.0, cs=4.0, od=6.0, bpm=170.0)
+    base.update(kw)
+    return Cand(**base)
+
+
+COMFORT = {"ar": 8.5, "cs": 4.3, "hp": 5.75}
+
+
+def test_a_map_inside_your_comfort_zone_is_not_penalised():
+    assert planner.comfort_factor(_cand(), COMFORT, []) == 1.0
+
+
+def test_unusual_settings_lower_a_map_without_banning_it():
+    harsh = planner.comfort_factor(_cand(ar=9.2, hp=6.0), COMFORT, [])
+    tiny_circles = planner.comfort_factor(_cand(cs=5.0), COMFORT, [])
+    assert planner.MIN_COMFORT_FACTOR < harsh < 1.0
+    assert planner.MIN_COMFORT_FACTOR < tiny_circles < harsh
+
+
+def test_maps_like_one_you_removed_come_after_different_ones():
+    removed = [{"ar": 9.2, "cs": 4.0, "hp": 6.0, "bpm": 175.0, "skill": "speed"}]
+    twin = planner.comfort_factor(_cand(ar=9.0, hp=6.0, bpm=170.0, weights={"speed": 1.0}), {}, removed)
+    other = planner.comfort_factor(_cand(ar=5.0, hp=3.0, bpm=120.0, weights={"stamina": 1.0}), {}, removed)
+    assert twin < other == 1.0
+
+
+def test_plan_prefers_comfortable_maps_when_everything_else_is_equal():
+    cands = candidates()
+    for c in cands:
+        c.ar, c.cs = 7.0, 4.0
+    harsh_ids = {c.beatmap_id for c in cands if c.beatmap_id % 2 == 0}
+    for c in cands:
+        if c.beatmap_id in harsh_ids:
+            c.ar, c.cs, c.hp = 9.6, 5.5, 7.0
+    items, _ = plan(context(comfort=COMFORT), cands)
+    chosen = [i.beatmap_id for i in items]
+    assert sum(i in harsh_ids for i in chosen) < len(chosen) / 2
+
+
+def test_joke_maps_with_absurd_settings_are_never_proposed():
+    cands = candidates()
+    joke = cands[0]
+    joke.ar, joke.cs = 0.0, 0.0
+    items, _ = plan(context(), cands)
+    assert joke.beatmap_id not in [i.beatmap_id for i in items]
+    assert planner.is_gimmick(joke) and not planner.is_gimmick(_cand())
