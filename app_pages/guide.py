@@ -114,7 +114,8 @@ with st.expander("Quelles parties sont prises en compte"):
     st.markdown(
         "En ligne : tes meilleurs scores et tes parties des dernières 24 h (fails compris). Dans lazer sur ce PC : "
         "toutes tes parties terminées. La synchro automatique (toutes les heures) et le suivi en direct évitent de "
-        "perdre des fails.")
+        "perdre des fails.\n\nNe comptent pas : une partie quittée avec très peu de miss (Échap, relance), et un "
+        "fail dans les premières notes d'une map bien plus facile que ton niveau (partie pour rire).")
 with st.expander("La jauge de vie (HP)"):
     hp_k = (clear or {}).get("hp_k")
     st.markdown(

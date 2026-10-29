@@ -27,6 +27,12 @@ HP_REF = 4.0           # HP habituel des maps jouées : sert de référence
 # finir la map (voir fit_clear_level).
 HP_K_RATING = 0.15
 SEED_WEIGHT = 0.5   # les scores d'avant le suivi (top plays) comptent moitié
+# Fail dans les premières notes d'une map bien plus facile que ton niveau : partie pour rire ou relancée exprès, pas
+# une vraie mort (vu chez un joueur à ~5,5★ qui ratait une 2,3★ en 16 notes : comptée, elle pouvait lui coûter 0,5★).
+# Les vraies morts en début de map arrivent près de ton niveau : sur tes parties, élargir la règle des abandons à
+# tous les fails précoces faisait disparaître de vrais échecs. D'où la marge, mesurée sous ta compétence la plus faible.
+CASUAL_FAIL_SHARE = 0.15   # fail avant 15 % des notes de la map...
+CASUAL_FAIL_MARGIN = 1.5   # ...sur une map au moins 1,5★ (HP compris) sous ta compétence la plus faible
 
 
 def effective_stars(stars: float, hp: float | None, k: float = HP_K_RATING) -> float:
@@ -36,6 +42,15 @@ def effective_stars(stars: float, hp: float | None, k: float = HP_K_RATING) -> f
 
 def expected(rating: float, stars: float) -> float:
     return 1 / (1 + math.exp(-(rating - stars) / SCALE))
+
+
+def casual_fail(passed: bool, judged: int | None, n_objects: int, stars: float, weakest: float) -> bool:
+    """Fail « pour rire » : très tôt dans une map bien plus facile que ta compétence la plus faible (`weakest`).
+
+    judged = notes jouées avant le fail ; inconnu (None) pour un fail déduit des compteurs : jamais écarté.
+    """
+    return (not passed and judged is not None and judged < CASUAL_FAIL_SHARE * n_objects
+            and stars <= weakest - CASUAL_FAIL_MARGIN)
 
 
 def seed_rating(rows) -> float:
@@ -56,7 +71,7 @@ def recompute(conn) -> dict[str, dict]:
     """Rejoue tout l'historique dans l'ordre chronologique et enregistre les notes."""
     rows = conn.execute(
         """SELECT s.score_id, s.beatmap_id, s.accuracy, s.n_miss, s.passed, s.pp, s.ended_at,
-                  a.stars, a.weights, a.attrs
+                  s.n_great + s.n_ok + s.n_meh + s.n_miss AS judged, a.stars, a.weights, a.attrs
            FROM scores s JOIN map_attrs a
              ON a.beatmap_id = s.beatmap_id AND a.mods_key = s.mods_key
            WHERE s.countable = 1 AND NOT s.abandoned
@@ -72,12 +87,16 @@ def recompute(conn) -> dict[str, dict]:
     games = {c: 0.0 for c in CATEGORIES}
     attempts = defaultdict(int)
     events = []
+    casual = []
 
     for r in rows:
         weights = json.loads(r["weights"])
         attrs = json.loads(r["attrs"])
         n_objects = attrs.get("n_objects") or DEFAULT_OBJECTS
         stars = effective_stars(r["stars"], attrs.get("hp"))
+        if casual_fail(bool(r["passed"]), r["judged"], n_objects, stars, min(ratings.values())):
+            casual.append(r["score_id"])
+            continue
         era = SEED_WEIGHT if r["ended_at"] < tracking_start else 1.0
         day_key = (r["beatmap_id"], r["ended_at"][:10])
         attempts[day_key] += 1
@@ -100,6 +119,7 @@ def recompute(conn) -> dict[str, dict]:
         "INSERT INTO ratings (category, rating, games, level) VALUES (?, ?, ?, ?)",
         [(c, round(ratings[c], 3), round(games[c], 2), round(levels[c], 3)) for c in CATEGORIES],
     )
+    db.set_meta(conn, "casual_fails", casual)  # écartés aussi du niveau de réussite (clear_level)
     conn.commit()
     return load(conn)
 
@@ -178,13 +198,14 @@ def clear_level(conn, clean: bool = False) -> dict | None:
     deux. Sert aux maps « Montée ».
     """
     rows = conn.execute(
-        """SELECT s.passed, s.mods, s.accuracy, s.n_miss, a.stars, a.attrs FROM scores s
+        """SELECT s.score_id, s.passed, s.mods, s.accuracy, s.n_miss, a.stars, a.attrs FROM scores s
            JOIN map_attrs a ON a.beatmap_id = s.beatmap_id AND a.mods_key = s.mods_key
            WHERE s.countable = 1 AND NOT s.abandoned AND s.source IN ('recent', 'lazer_local')"""
     ).fetchall()
+    casual = set(db.get_meta(conn, "casual_fails", []))  # rempli par recompute(), appelé juste avant
     points = []
     for r in rows:
-        if {m["acronym"] for m in json.loads(r["mods"])} & EASY_MODS:
+        if r["score_id"] in casual or {m["acronym"] for m in json.loads(r["mods"])} & EASY_MODS:
             continue
         attrs = json.loads(r["attrs"])
         ok = (meets(bool(r["passed"]), r["accuracy"], r["n_miss"], attrs.get("n_objects") or DEFAULT_OBJECTS,

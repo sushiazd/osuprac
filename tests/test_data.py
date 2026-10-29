@@ -134,6 +134,32 @@ def test_quitting_a_map_is_not_a_fail(conn):
     assert {r[0] for r in conn.execute("SELECT DISTINCT score_id FROM rating_events")} == {2}
 
 
+def test_failing_a_much_easier_map_for_fun_does_not_count(conn):
+    """Un joueur à ~5★ rate une 2,3★ dans les 16 premières notes : pour rire, pas une vraie mort.
+
+    Un fail tôt près de son niveau, ou tard sur la map facile, compte toujours.
+    """
+    from osuprog import rating
+    add_map(conn, 10, stars=5.5)
+    add_map(conn, 11, stars=2.3, n_objects=172)
+    add_map(conn, 12, stars=4.5, n_objects=300)
+    for i in range(5):
+        store_score(conn, score(100 + i, 10, f"2026-10-0{i + 1}T20:00:00Z"), "recent")
+
+    def fail(score_id, beatmap_id, ended_at, judged, miss):
+        s = score(score_id, beatmap_id, ended_at, accuracy=0.5, miss=miss, passed=False)
+        s["statistics"] = {"great": judged - miss, "ok": 0, "meh": 0, "miss": miss}
+        store_score(conn, s, "recent")
+
+    fail(1, 11, "2026-10-08T20:00:00Z", judged=16, miss=5)   # pour rire : écarté
+    fail(2, 12, "2026-10-08T20:05:00Z", judged=20, miss=6)   # tôt, mais près de son niveau : compte
+    fail(3, 11, "2026-10-08T20:10:00Z", judged=120, miss=30)  # tard sur la map facile : compte
+    rating.recompute(conn)
+    counted = {r[0] for r in conn.execute("SELECT DISTINCT score_id FROM rating_events")}
+    assert {2, 3} <= counted and 1 not in counted
+    assert db.get_meta(conn, "casual_fails") == [1]
+
+
 def test_a_climb_map_counts_only_if_finished_cleanly(conn):
     """Montée : finie avec au plus 8 % de miss. Survivre avec 50 miss (jauge de vie basse) reste à retenter."""
     from osuprog.ui import item_state
