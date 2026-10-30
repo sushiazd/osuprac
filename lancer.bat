@@ -3,6 +3,14 @@ rem Double-clic : installe tout la premiere fois, puis ouvre le tableau de bord.
 cd /d "%~dp0"
 set "PYDIR=%LOCALAPPDATA%\Programs\Python\Python312"
 
+if "%~1"=="apres-maj" goto deps_check
+rem Mise a jour automatique (silencieuse hors-ligne), puis relance de ce fichier : il a pu etre remplace.
+if exist ".venv\Scripts\python.exe" (
+    ".venv\Scripts\python.exe" tools\update.py
+    start "" "%~f0" apres-maj
+    exit
+)
+:deps_check
 if exist ".venv\Scripts\python.exe" goto deps
 
 call :find_python
