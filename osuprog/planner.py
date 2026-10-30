@@ -33,7 +33,7 @@ from .model import CALIBRATED_GAMES, DEFAULT_CLEAR_SCALE
 from .rating import HP_REF, effective_stars
 from .skills import CATEGORIES, CLEAN_FINISH, CRITERIA, LABELS
 
-PLAN_FORMAT = 20               # à incrémenter quand l'algorithme change
+PLAN_FORMAT = 21               # à incrémenter quand l'algorithme change
 # intensité -> (chances de FINIR la map visées, chances d'atteindre l'OBJECTIF de précision visées)
 # « équilibré » est le réglage le plus robuste en simulation (meilleure moyenne et meilleur pire cas
 # sous quatre hypothèses d'apprentissage, voir tools/simulate_training.py).
@@ -49,6 +49,7 @@ TIER_BONUS = 1.3              # une map de palier fait aussi avancer le débloca
 MAX_TESTS = 2
 MAX_PER_CREATOR = 2
 PLAN_FINISH_FLOOR = 0.25      # on ne propose pas de map que tu as très peu de chances de finir
+LEVEL_FLOOR_BELOW = 0.8       # jamais de map à plus de 0,8★ sous la moyenne de tes compétences (rien à y apprendre)
 CLIMB_SHARE = 0.35            # part de la séance jouée près de ta limite (« Montée »)
 CLIMB_FINISH, CLIMB_WIDTH = 0.62, 0.15  # … sur des maps que tu finis proprement environ 6 fois sur 10
 CLIMB_MAX_ABOVE = 0.35        # … sans dépasser ton niveau de passe de plus de 0,35★
@@ -288,8 +289,12 @@ def plan(ctx: Context, cands: list[Cand]) -> tuple[list[Item], dict]:
             return p_finish_of(c)
         return model.finish_prob_for(ctx.clean, c.stars, c.hp)
 
+    # Plancher fixé par les compétences, pas par le niveau de réussite : celui-ci peut être tiré très bas par des
+    # dizaines de relances sur des maps bien trop dures (5,4★ de compétences, maps à 2-3★ proposées).
+    levels = list((ctx.levels or ctx.ratings).values())
+    floor = max(ctx.level - 1.6, statistics.mean(levels) - LEVEL_FLOOR_BELOW) if levels else ctx.level - 1.6
     cands = [c for c in cands if c.beatmap_id not in ctx.exclude and not is_gimmick(c)
-             and ctx.level - 1.6 <= c.stars <= ctx.level + 1.3 and c.length_s > 0
+             and floor <= c.stars <= ctx.level + 1.3 and c.length_s > 0
              and (p_finish_of(c) is None or p_finish_of(c) >= PLAN_FINISH_FLOOR)]
     shares, parts = skill_shares(ctx, cands)
     summary = {"shares": shares, "parts": parts, "level": ctx.level, "budget": ctx.budget_min,
