@@ -16,6 +16,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 
+SUPABASE_URL = "https://snpoixgyihppxwlhukvn.supabase.co"
+# Clé publique : elle ne permet QUE d'ajouter des lignes dans la table `bilans` (aucune lecture).
+SUPABASE_KEY = "sb_publishable_THREY0j8b3laBzniUrdyDg_DuXE1wm3"
+
+
 def find_db() -> Path:
     for base in (os.getenv("OSU_DATA_DIR"), Path(os.getenv("LOCALAPPDATA", "")) / "osu-progression",
                  Path(__file__).resolve().parent.parent / "data"):
@@ -59,18 +64,10 @@ def map_info(conn, bid, mods_key=None):
     return (row["stars"] if row else None), hp, name
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--depuis", help='ex. "2026-10-29 18:00" (heure locale)')
-    ap.add_argument("--sortie", default="bilan-osu.txt")
-    args = ap.parse_args()
-    since = datetime.fromisoformat(args.depuis) if args.depuis else (datetime.now() - timedelta(days=1)).replace(hour=18, minute=0, second=0, microsecond=0)
-
-    db = find_db()
-    conn = open_ro(db)
+def rapport(conn, since, db_path='') -> str:
     out = []
     w = out.append
-    w(f"Bilan généré le {datetime.now():%Y-%m-%d %H:%M} — base : {db} — depuis {since:%Y-%m-%d %H:%M}\n")
+    w(f"Bilan généré le {datetime.now():%Y-%m-%d %H:%M} — base : {db_path} — depuis {since:%Y-%m-%d %H:%M}\n")
 
     w("== Niveau estimé par l'outil ==")
     for k in ("user", "last_sync", "criteria_version", "classifier_version", "clear_level", "clean_level",
@@ -144,8 +141,56 @@ def main():
     for b in sorted(bands):
         v = bands[b]
         w(f"  {b:.1f}-{b + 0.5:.1f}★  {len(v):>6}  {100 * sum(1 for p, _ in v if p) / len(v):>6.0f}%  {statistics.median(a for _, a in v):>8.1f}%")
+    return "\n".join(out) + "\n"
 
-    Path(args.sortie).write_text("\n".join(out) + "\n", encoding="utf-8")
+
+def envoyer(texte: str, joueur: str) -> None:
+    import urllib.request
+    body = json.dumps({"player": joueur[:64], "payload": {"text": texte}}).encode()
+    req = urllib.request.Request(f"{SUPABASE_URL}/rest/v1/bilans", data=body, method="POST", headers={
+        "apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json", "Prefer": "return=minimal"})
+    urllib.request.urlopen(req, timeout=15).close()
+
+
+def partage_autorise(data_dir: Path) -> bool:
+    """Demande une seule fois (au lancement) si le joueur accepte d'envoyer son bilan ; mémorisé dans partage.txt."""
+    f = data_dir / "partage.txt"
+    if f.exists():
+        return f.read_text().strip() == "oui"
+    if not sys.stdin or not sys.stdin.isatty():
+        return False
+    print("\nPartager automatiquement ton bilan (niveau estimé, maps proposées, résultats) avec le développeur ?")
+    print("Il n'y a aucun mot de passe ni clé dedans. Tu pourras changer d'avis en supprimant le fichier", f)
+    ok = input("Oui / Non ? [o/N] ").strip().lower().startswith("o")
+    f.write_text("oui" if ok else "non")
+    return ok
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--depuis", help='ex. "2026-10-29 18:00" (heure locale)')
+    ap.add_argument("--sortie", default="bilan-osu.txt")
+    ap.add_argument("--auto", action="store_true", help="envoie le bilan si le joueur a accepté (appelé par lancer.bat)")
+    args = ap.parse_args()
+    db = find_db()
+    if args.auto:
+        try:
+            if not partage_autorise(db.parent):
+                return
+            conn = open_ro(db)
+            texte = rapport(conn, datetime.now() - timedelta(days=2), str(db))
+            try:
+                joueur = json.loads(meta(conn, "user") or "{}").get("username") or "inconnu"
+            except ValueError:
+                joueur = "inconnu"
+            envoyer(texte, joueur)
+            print("Bilan envoyé.")
+        except Exception as e:  # jamais bloquant : l'outil se lance quoi qu'il arrive
+            print(f"(bilan non envoyé : {e})")
+        return
+    since = datetime.fromisoformat(args.depuis) if args.depuis else (datetime.now() - timedelta(days=1)).replace(hour=18, minute=0, second=0, microsecond=0)
+    Path(args.sortie).write_text(rapport(open_ro(db), since, str(db)), encoding="utf-8")
     print(f"OK -> {Path(args.sortie).resolve()}\nEnvoie ce fichier.")
 
 

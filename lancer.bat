@@ -61,6 +61,9 @@ pause
 exit /b 0
 
 :run
+rem Bilan partage avec le developpeur : seulement si le joueur a accepte (question posee une seule fois).
+chcp 65001 >nul
+".venv\Scripts\python.exe" tools\diagnostic.py --auto
 rem Ferme les anciens serveurs du tableau de bord : on repart toujours sur la derniere version du code.
 powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -in 'streamlit.exe','python.exe' -and $_.CommandLine -like '*%~dp0.venv*streamlit*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
 ".venv\Scripts\streamlit.exe" run app.py --server.port 8501
