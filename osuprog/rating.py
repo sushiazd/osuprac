@@ -215,4 +215,25 @@ def clear_level(conn, clean: bool = False) -> dict | None:
         key = (r["beatmap_id"], r["mods"], (r["ended_at"] or "")[:10])
         prev = day_points.get(key)
         day_points[key] = (r["stars"], attrs.get("hp", HP_REF), 1.0 if ok or (prev and prev[2]) else 0.0)
-    return fit_clear_level(list(day_points.values()))
+    return shrink_to_ratings(conn, fit_clear_level(list(day_points.values())))
+
+
+CLEAR_PRIOR_PLAYS = 30     # poids (en parties) de l'a priori « niveau de réussite ≈ niveau des compétences + 0,4★ »
+CLEAR_PRIOR_OFFSET = 0.4
+CLEAR_SCALE_MAX = 1.0
+
+
+def shrink_to_ratings(conn, fit: dict | None) -> dict | None:
+    """Ramène le niveau de réussite vers ce que disent les notes des compétences quand les parties récentes ne le
+    déterminent pas bien (peu de parties, ou beaucoup de relances sur des maps bien trop dures : courbe quasi plate).
+    Sans cela, un joueur de 5,4★ pouvait se voir proposer des maps à 2-3★."""
+    if fit is None:
+        return None
+    levels = [r["level"] if r["level"] is not None else r["rating"]
+              for r in conn.execute("SELECT rating, level FROM ratings WHERE games >= 5")]
+    if not levels:
+        return fit
+    prior = statistics.mean(levels) + CLEAR_PRIOR_OFFSET
+    n = fit["plays"]
+    level = (n * fit["level"] + CLEAR_PRIOR_PLAYS * prior) / (n + CLEAR_PRIOR_PLAYS)
+    return {**fit, "level": round(level, 2), "scale": min(fit["scale"], CLEAR_SCALE_MAX)}

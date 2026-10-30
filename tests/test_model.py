@@ -76,3 +76,18 @@ def test_clear_level_counts_a_replayed_map_once_per_day(conn):
         store_score(conn, score(sid, 999, f"2026-10-20T12:{k:02d}:00Z", accuracy=0.6, miss=30, passed=False), "recent")
         sid += 1
     assert abs(clear_level(conn)["level"] - normal) < 0.15
+
+
+def test_clear_level_is_pulled_toward_skill_ratings_when_data_is_flat(conn):
+    """Peu de parties : le niveau de réussite ne reste pas à 2★ pour un joueur de 5★."""
+    from conftest import add_map, score
+    from osuprog.rating import clear_level
+    from osuprog.sync import store_score
+
+    conn.executemany("INSERT OR REPLACE INTO ratings (category, rating, games, level) VALUES (?, 5.4, 50, 5.4)",
+                     [("aim",), ("speed",)])
+    for i in range(25):  # 25 parties seulement, réussies jusqu'à 3,5★
+        add_map(conn, 200 + i, stars=2.0 + i * 0.3)
+        store_score(conn, score(i + 1, 200 + i, f"2026-10-{1 + i:02d}T12:00:00Z", passed=2.0 + i * 0.3 <= 3.5,
+                                miss=0 if 2.0 + i * 0.3 <= 3.5 else 25), "recent")
+    assert clear_level(conn)["level"] >= 4.5
