@@ -56,3 +56,23 @@ def test_calibration_corrects_an_overconfident_model():
         samples.append((z, 1.0 if rng.random() < truth else 0.0, 1.0))
     a, b = model.fit_calibration(samples, prior=1.0)
     assert -0.7 < a < -0.3 and 0.65 < b < 0.95
+
+
+def test_clear_level_counts_a_replayed_map_once_per_day(conn):
+    """40 relances ratées d'une même map ne doivent pas tirer le niveau de réussite vers le bas."""
+    from conftest import add_map, score
+    from osuprog.rating import clear_level
+    from osuprog.sync import store_score
+
+    sid = 1
+    for i in range(30):  # 30 maps de 3 à 6★ : finies jusqu'à 5★, ratées au-delà
+        stars = 3.0 + i * 0.1
+        add_map(conn, 100 + i, stars=stars)
+        store_score(conn, score(sid, 100 + i, f"2026-10-{1 + i % 25:02d}T12:00:00Z", passed=stars <= 4.5, miss=0 if stars <= 4.5 else 25), "recent")
+        sid += 1
+    normal = clear_level(conn)["level"]
+    add_map(conn, 999, stars=3.5)
+    for k in range(40):  # même map, même jour, 40 échecs (relances)
+        store_score(conn, score(sid, 999, f"2026-10-20T12:{k:02d}:00Z", accuracy=0.6, miss=30, passed=False), "recent")
+        sid += 1
+    assert abs(clear_level(conn)["level"] - normal) < 0.15

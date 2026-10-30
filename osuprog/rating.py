@@ -198,17 +198,21 @@ def clear_level(conn, clean: bool = False) -> dict | None:
     deux. Sert aux maps « Montée ».
     """
     rows = conn.execute(
-        """SELECT s.score_id, s.passed, s.mods, s.accuracy, s.n_miss, a.stars, a.attrs FROM scores s
+        """SELECT s.score_id, s.beatmap_id, s.ended_at, s.passed, s.mods, s.accuracy, s.n_miss, a.stars, a.attrs FROM scores s
            JOIN map_attrs a ON a.beatmap_id = s.beatmap_id AND a.mods_key = s.mods_key
            WHERE s.countable = 1 AND NOT s.abandoned AND s.source IN ('recent', 'lazer_local')"""
     ).fetchall()
     casual = set(db.get_meta(conn, "casual_fails", []))  # rempli par recompute(), appelé juste avant
-    points = []
+    # Une map rejouée dans la journée = UNE observation (réussie si une tentative l'est) : 40 relances de la même
+    # map à 7★ n'apprennent pas 40 fois que tu ne la finis pas, et noyaient le niveau (2,8★ au lieu de ~6★).
+    day_points: dict[tuple, tuple] = {}
     for r in rows:
         if r["score_id"] in casual or {m["acronym"] for m in json.loads(r["mods"])} & EASY_MODS:
             continue
         attrs = json.loads(r["attrs"])
         ok = (meets(bool(r["passed"]), r["accuracy"], r["n_miss"], attrs.get("n_objects") or DEFAULT_OBJECTS,
                     CLEAN_FINISH) if clean else bool(r["passed"]))
-        points.append((r["stars"], attrs.get("hp", HP_REF), 1.0 if ok else 0.0))
-    return fit_clear_level(points)
+        key = (r["beatmap_id"], r["mods"], (r["ended_at"] or "")[:10])
+        prev = day_points.get(key)
+        day_points[key] = (r["stars"], attrs.get("hp", HP_REF), 1.0 if ok or (prev and prev[2]) else 0.0)
+    return fit_clear_level(list(day_points.values()))

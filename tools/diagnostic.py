@@ -92,7 +92,7 @@ def rapport(conn, since, db_path='') -> str:
         for it in items:
             stars, hp, name = map_info(conn, it["beatmap_id"])
             first = None
-            for s in conn.execute("SELECT * FROM scores WHERE beatmap_id=? ORDER BY ended_at", (it["beatmap_id"],)):
+            for s in conn.execute("SELECT * FROM scores WHERE beatmap_id=? AND NOT abandoned ORDER BY ended_at", (it["beatmap_id"],)):
                 if s["ended_at"] and local(s["ended_at"]).date().isoformat() == day:
                     first = s
                     break
