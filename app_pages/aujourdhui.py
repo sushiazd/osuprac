@@ -91,11 +91,6 @@ if not items:
     st.info("Pas encore de maps pour aujourd'hui : clique sur **Synchroniser**.", icon=":material/sync:")
 elif current is None:
     st.success("Séance terminée. Bravo !", icon=":material/check_circle:")
-    if st.button("Rajouter 15 min", icon=":material/more_time:"):
-        planner.add_session_time(conn, day, 15)
-        with st.spinner("Choix des maps…"):
-            planner.build_session(conn, api_or_none(), ratings, day, log=lambda *_: None)
-        st.rerun()
 else:
     card(current, highlight=True)
 
@@ -109,3 +104,12 @@ if finished:
     with st.expander(f"Terminées ({len(finished)})"):
         for i in finished:
             card(i)
+
+if items:
+    st.space("small")
+    if st.button("Rajouter un entraînement (15 min)", icon=":material/more_time:", width="stretch",
+                 help="Ajoute des maps à la fin de la séance, quand tu veux, même si elle n'est pas finie."):
+        planner.add_session_time(conn, day, 15)
+        with st.spinner("Choix des maps…"):
+            planner.build_session(conn, api_or_none(), ratings, day, log=lambda *_: None)
+        st.rerun()
