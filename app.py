@@ -63,13 +63,22 @@ def run_sync(username: str | None) -> None:
     st.rerun()
 
 
-def quiet_sync() -> bool:
-    """Synchro du suivi en direct : sans journal à l'écran ; une erreur est simplement retentée plus tard."""
+def quick_sync() -> bool:
+    """Synchro express du suivi en direct : sans journal à l'écran ; une erreur est simplement retentée plus tard."""
+    try:
+        sync(log=lambda *_: None, online=False)
+    except Exception:
+        return False
+    st.rerun(scope="app")
+
+
+def online_sync() -> bool:
+    """Synchro complète qui suit, lancée en arrière-plan (aucun appel à Streamlit ici)."""
     try:
         sync(log=lambda *_: None)
     except Exception:
         return False
-    st.rerun(scope="app")
+    return True
 
 
 conn = db.connect()
@@ -101,13 +110,19 @@ with st.sidebar:
             conn.commit()
 
         if live_on and has_data:
-            @st.fragment(run_every="10s")
+            @st.fragment(run_every=f"{live.POLL_S}s")
             def live_watch() -> None:
+                if live.online_finished():
+                    st.rerun(scope="app")
                 c = db.connect()
-                if live.pending(c):
-                    with st.spinner("Nouvelle partie…"):
-                        live.check(c, quiet_sync)
-                c.close()
+                try:
+                    if live.pending(c):
+                        with st.spinner("Nouvelle partie…"):
+                            live.check(c, quick_sync)
+                    elif live.online_due(c):
+                        live.start_online(c, online_sync)
+                finally:
+                    c.close()
 
             live_watch()
     if last:

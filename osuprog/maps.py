@@ -154,10 +154,17 @@ def load_bundled_pool(conn, log=print) -> None:
     """
     if not BUNDLED_POOL.exists():
         return
+    # Le décompresser coûte ~1,5 s : on ne le relit que si le fichier a changé (mise à jour de l'outil).
+    stat = BUNDLED_POOL.stat()
+    file_key = f"{stat.st_size}:{stat.st_mtime_ns}"
+    if db.get_meta(conn, "bundled_pool_file") == file_key:
+        return
     with gzip.open(BUNDLED_POOL, "rt", encoding="utf-8") as f:
         data = json.load(f)
     version = f"{data['version']}:{len(data['maps'])}"  # deux catalogues du même jour restent distincts
     if db.get_meta(conn, "bundled_pool") == version:
+        db.set_meta(conn, "bundled_pool_file", file_key)
+        conn.commit()
         return
     log(f"Chargement du catalogue ({len(data['maps'])} maps)…")
     beatmaps, attrs = [], []
@@ -178,6 +185,7 @@ def load_bundled_pool(conn, log=print) -> None:
              favourites = max(beatmaps.favourites, excluded.favourites)""", beatmaps)
     conn.executemany("INSERT OR REPLACE INTO map_attrs VALUES (?, ?, ?, ?, ?, ?)", attrs)
     db.set_meta(conn, "bundled_pool", version)
+    db.set_meta(conn, "bundled_pool_file", file_key)
     conn.commit()
     log(f"Catalogue chargé : {len(data['maps'])} maps déjà analysées.")
 

@@ -95,9 +95,55 @@ def test_live_sync_waits_for_a_settled_new_file():
     now = 1_000_000.0
     assert not live.due(None, None, None, now)                          # lazer absent
     assert not live.due(now - 100, now - 100, None, now)                # rien de nouveau
-    assert not live.due(now - 2, now - 100, None, now)                  # fichier encore en écriture
-    assert live.due(now - 20, now - 100, None, now)
-    assert not live.due(now - 20, now - 100, now - 10, now)             # dernière tentative trop récente
+    assert not live.due(now - 0.5, now - 100, None, now)                # fichier encore en écriture
+    assert live.due(now - 1.5, now - 100, None, now)                    # partie finie il y a 1,5 s : on lit
+    assert not live.due(now - 20, now - 100, now - 2, now)              # dernière tentative trop récente
+    assert live.due(now - 20, now - 100, now - 6, now)
+
+
+def test_live_express_sync_is_followed_by_a_full_sync_in_the_background(monkeypatch, conn, tmp_path):
+    real_connect = db.connect
+    monkeypatch.setattr(db, "connect", lambda path=None: real_connect(tmp_path / "test.sqlite"))
+    monkeypatch.setattr(live, "activity_mtime", lambda: time.time() - 3)
+    db.set_meta(conn, "realm_seen", time.time() - 100)
+    conn.commit()
+    assert live.check(conn, lambda: None)
+    assert not live.online_due(conn)                                    # pas tout de suite : lazer envoie la partie
+    db.set_meta(conn, "live_online_due", time.time() - 1)
+
+    outcomes = iter([False, True])                                      # réseau coupé, puis rétabli
+    for expected_retry in (True, False):
+        assert live.online_due(conn)
+        live.start_online(conn, lambda: next(outcomes))
+        live._online["thread"].join(5)
+        conn.rollback()
+        due_at = db.get_meta(conn, "live_online_due")
+        assert (due_at is not None and due_at > time.time()) == expected_retry
+        if expected_retry:
+            assert not live.online_finished()
+            db.set_meta(conn, "live_online_due", time.time() - 1)
+    assert live.online_finished() and not live.online_finished()       # le tableau de bord se redessine une fois
+
+
+def test_express_sync_reads_lazer_only(monkeypatch, conn):
+    """Synchro express : aucun appel à osu!, seulement les parties locales de lazer."""
+    db.set_meta(conn, "user", {"id": 1, "username": "moi"})
+    db.set_meta(conn, "tracking_start", "2026-10-01T00:00:00Z")
+    conn.commit()
+    monkeypatch.setattr(db, "connect", lambda path=None: conn)
+    monkeypatch.setattr("osuprog.sync.local_scores", lambda c, user_id, log: 3 if user_id == 1 else 0)
+    monkeypatch.setattr("osuprog.sync._finish", lambda c, api, before, new, first_sync, started, log: new)
+
+    class NoNetwork:
+        def __getattr__(self, name):
+            raise AssertionError(f"appel à osu! pendant la synchro express : {name}")
+
+    assert _sync(None, lambda *_: None, NoNetwork(), online=False) == 3
+
+    played = score(43, 1, "2026-10-03T21:00:00Z")
+    assert store_score(conn, {**played, "pp": None}, "lazer_local")                    # lue dans lazer, pas encore notée
+    assert not store_score(conn, played, "recent")
+    assert conn.execute("SELECT pp FROM scores WHERE score_id = 43").fetchone()[0] == 10.0
 
 
 class FakeApi:

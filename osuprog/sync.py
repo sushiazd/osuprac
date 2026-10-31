@@ -58,6 +58,9 @@ def store_score(conn, s: dict, source: str) -> bool:
             json.dumps(stats) if stats else None,
         ),
     )
+    if cur.rowcount == 0 and s.get("pp") is not None:
+        # Partie lue dans lazer avant qu'osu! ne la note (synchro express) : la version en ligne apporte ses pp.
+        conn.execute("UPDATE scores SET pp = ? WHERE score_id = ? AND pp IS NULL", (s["pp"], s["id"]))
     if cur.rowcount == 0 and stats:
         # Parties enregistrées avant qu'on garde les statistiques complètes (fins de sliders...) : on complète.
         conn.execute("""UPDATE scores SET stats = ? WHERE score_id = ?
@@ -127,16 +130,22 @@ class WrongPlayer(RuntimeError):
     """La base suit déjà un autre joueur : mélanger deux joueurs fausserait toutes les notes."""
 
 
-def sync(username: str | None = None, log=print, api=None) -> dict:
+def sync(username: str | None = None, log=print, api=None, online: bool = True) -> dict:
+    """online=False : synchro express du suivi en direct (~1 s). Ne lit que les parties locales de lazer, sans
+    appeler osu! ni faire l'entretien de la base ; la synchro complète suit quelques secondes plus tard."""
     with db.sync_lock():
-        return _sync(username, log, api)
+        return _sync(username, log, api, online)
 
 
-def _sync(username: str | None, log, api) -> dict:
+def _sync(username: str | None, log, api, online: bool = True) -> dict:
     started = time.monotonic()
-    db.repair_if_corrupt(log=log)
+    if online:
+        db.repair_if_corrupt(log=log)
     conn = db.connect()
     known = db.get_meta(conn, "user")
+    if not online and known and db.get_meta(conn, "tracking_start"):
+        before = rewards.snapshot(conn)
+        return _finish(conn, api or OsuApi(), before, local_scores(conn, known["id"], log), False, started, log)
     username = (username or (known or {}).get("username") or OSU_USERNAME).strip()
     if not username:
         raise ValueError("Indique ton pseudo osu! (OSU_USERNAME dans .env).")
@@ -185,10 +194,20 @@ def _sync(username: str | None, log, api) -> dict:
     new += sum(store_score(conn, s, "best") for s in best)
     conn.commit()
     new += import_history(conn, api, user["id"], log)
+    new += local_scores(conn, user["id"], log)
+    return _finish(conn, api, before, new, first_sync, started, log)
+
+
+def local_scores(conn, user_id: int, log) -> int:
     try:
-        new += lazer.import_local(conn, user["id"], store_score, log)
+        return lazer.import_local(conn, user_id, store_score, log)
     except Exception as e:  # la synchro en ligne reste valable même si la lecture locale échoue
         log(f"Lecture des parties locales de lazer impossible : {e}")
+        return 0
+
+
+def _finish(conn, api, before: dict, new: int, first_sync: bool, started: float, log) -> dict:
+    """Tout ce qui découle des parties : notes, paliers, séance du jour, succès."""
     update_inferred_fails(conn)
 
     rows = conn.execute("SELECT DISTINCT beatmap_id, mods FROM scores WHERE countable = 1").fetchall()
