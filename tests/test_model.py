@@ -70,12 +70,30 @@ def test_clear_level_counts_a_replayed_map_once_per_day(conn):
         add_map(conn, 100 + i, stars=stars)
         store_score(conn, score(sid, 100 + i, f"2026-10-{1 + i % 25:02d}T12:00:00Z", passed=stars <= 4.5, miss=0 if stars <= 4.5 else 25), "recent")
         sid += 1
-    normal = clear_level(conn)["level"]
     add_map(conn, 999, stars=3.5)
-    for k in range(40):  # même map, même jour, 40 échecs (relances)
-        store_score(conn, score(sid, 999, f"2026-10-20T12:{k:02d}:00Z", accuracy=0.6, miss=30, passed=False), "recent")
-        sid += 1
-    assert abs(clear_level(conn)["level"] - normal) < 0.15
+    store_score(conn, score(sid, 999, "2026-10-20T12:00:00Z", accuracy=0.6, miss=30, passed=False), "recent")
+    once = clear_level(conn)["level"]
+    for k in range(1, 40):  # même map, même jour : 39 échecs de plus (relances)
+        store_score(conn, score(sid + k, 999, f"2026-10-20T12:{k:02d}:00Z", accuracy=0.6, miss=30, passed=False),
+                    "recent")
+    assert clear_level(conn)["level"] == once
+
+
+def test_clear_level_follows_your_recent_plays(conn):
+    """Un joueur qui progresse : ses parties d'il y a deux mois ne retiennent pas son niveau d'aujourd'hui."""
+    from conftest import add_map, score
+    from osuprog.rating import clear_level
+    from osuprog.sync import store_score
+
+    sid = 1
+    for month, limit in ((8, 3.0), (10, 4.5)):  # en août il finissait jusqu'à 3★, en octobre jusqu'à 4,5★
+        for i in range(30):
+            stars = 2.0 + i * 0.12
+            add_map(conn, sid, stars=stars)
+            store_score(conn, score(sid, sid, f"2026-{month:02d}-{1 + i % 28:02d}T12:00:00Z", passed=stars <= limit,
+                                    miss=0 if stars <= limit else 25), "recent")
+            sid += 1
+    assert clear_level(conn)["level"] > 4.0
 
 
 def test_clear_level_is_pulled_toward_skill_ratings_when_data_is_flat(conn):

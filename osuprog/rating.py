@@ -7,6 +7,7 @@ import json
 import math
 import statistics
 from collections import defaultdict
+from datetime import date
 
 from . import db
 from .mods import EASY_MODS
@@ -130,13 +131,15 @@ def load(conn) -> dict[str, dict]:
                             "level": r["level"] if r["level"] is not None else r["rating"]} for r in rows}
 
 
-def fit_clear_level(points: list[tuple]) -> dict | None:
+def fit_clear_level(points: list[tuple], weights: list[float] | None = None) -> dict | None:
     """Niveau d'étoiles où tu finis une map une fois sur deux, par régression logistique.
 
     points = [(étoiles, finie 0/1)] ou [(étoiles, HP, finie 0/1)]. Avec le HP, on estime aussi combien
     d'étoiles « vaut » un point de HP pour survivre (hp_k). Indépendant des objectifs de précision.
+    weights : poids de chaque point (les parties récentes comptent plus), 1 par défaut.
     """
     pts = [(p[0], (p[1] if len(p) == 3 else HP_REF) - HP_REF, p[-1]) for p in points]
+    ws = weights or [1.0] * len(pts)
     if len(pts) < 20 or not any(y for _, _, y in pts) or all(y for _, _, y in pts):
         return None
 
@@ -150,12 +153,12 @@ def fit_clear_level(points: list[tuple]) -> dict | None:
     for _ in range(100):
         g = [0.0] * 3
         h = [[0.0] * 3 for _ in range(3)]
-        for x, dh, y in pts:
+        for (x, dh, y), k in zip(pts, ws):
             f = (1.0, x, dh)
             p = sigmoid(sum(wi * fi for wi, fi in zip(w, f)))
-            v = p * (1 - p) + 1e-6
+            v = k * (p * (1 - p) + 1e-6)
             for i in range(3):
-                g[i] += (y - p) * f[i]
+                g[i] += k * (y - p) * f[i]
                 for j in range(3):
                     h[i][j] += v * f[i] * f[j]
         g[2] -= prior[2] * w[2]
@@ -188,7 +191,7 @@ def fit_clear_level(points: list[tuple]) -> dict | None:
     level = -a / b
     highest = max(x for x, _, y in pts if y)
     return {"level": round(max(0.5, min(level, 9.0)), 2), "highest": round(highest, 2), "plays": len(pts),
-            "scale": round(max(0.2, min(-1 / b, 1.5)), 2), "hp_k": round(max(0.0, min(c / b, 0.6)), 3)}
+            "weight": round(sum(ws), 1), "scale": round(max(0.2, min(-1 / b, 1.5)), 2), "hp_k": round(max(0.0, min(c / b, 0.6)), 3)}
 
 
 def clear_level(conn, clean: bool = False) -> dict | None:
@@ -215,9 +218,19 @@ def clear_level(conn, clean: bool = False) -> dict | None:
         key = (r["beatmap_id"], r["mods"], (r["ended_at"] or "")[:10])
         prev = day_points.get(key)
         day_points[key] = (r["stars"], attrs.get("hp", HP_REF), 1.0 if ok or (prev and prev[2]) else 0.0)
-    return shrink_to_ratings(conn, fit_clear_level(list(day_points.values())))
+    if not day_points:
+        return None
+    # Les parties récentes comptent plus : à poids égal, tes parties de septembre retenaient le niveau ~0,5★ sous
+    # ce que tu finissais vraiment fin octobre. L'âge part de ta dernière partie : une pause ne fait rien oublier.
+    last = max(date.fromisoformat(k[2]) for k in day_points)
+    weights = [0.5 ** ((last - date.fromisoformat(k[2])).days / CLEAR_HALF_LIFE_DAYS) for k in day_points]
+    return shrink_to_ratings(conn, fit_clear_level(list(day_points.values()), weights))
 
 
+# Demi-vie choisie en rejouant tes parties jour après jour (2026-11-01) : prévoir chaque jour avec les parties d'avant,
+# erreur (log-loss) 0,483 sans pondération, 0,471 à 30 jours, 0,457 à 14, 0,442 à 7 ; plus court, la courbe devient
+# trop raide faute de parties.
+CLEAR_HALF_LIFE_DAYS = 7
 CLEAR_PRIOR_PLAYS = 30     # poids (en parties) de l'a priori « niveau de réussite ≈ niveau des compétences + 0,4★ »
 CLEAR_PRIOR_OFFSET = 0.4
 CLEAR_SCALE_MAX = 1.0
@@ -234,6 +247,6 @@ def shrink_to_ratings(conn, fit: dict | None) -> dict | None:
     if not levels:
         return fit
     prior = statistics.mean(levels) + CLEAR_PRIOR_OFFSET
-    n = fit["plays"]
+    n = fit.get("weight", fit["plays"])
     level = (n * fit["level"] + CLEAR_PRIOR_PLAYS * prior) / (n + CLEAR_PRIOR_PLAYS)
     return {**fit, "level": round(level, 2), "scale": min(fit["scale"], CLEAR_SCALE_MAX)}

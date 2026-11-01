@@ -8,6 +8,13 @@ import math
 from .rating import HP_REF, SCALE
 
 LOGIT_CLIP = 30.0
+# Correction apprise sur les maps du programme : sur tes 51 premiers essais vérifiables (octobre et 1er novembre), les
+# chances affichées étaient de 54 % pour 69 % de réussite, alors que le recalage est juste sur l'ensemble de tes
+# parties. On décale donc les chances de ce que montrent tes séances, prudemment (a priori resserré vers 0).
+PLAN_ROLES = ("Échauffement", "Entraînement", "Objectif", "Révision", "Test de niveau")  # chances = objectif atteint
+PLAN_OFFSET_RECENT = 80     # derniers premiers essais pris en compte : la correction suit ta progression
+PLAN_OFFSET_PRIOR_SD = 0.5  # en logit : avec ~50 essais, l'écart mesuré est retenu aux trois quarts environ
+PLAN_OFFSET_MAX = 1.0
 CALIBRATED_GAMES = 3      # en dessous, la note d'une compétence est encore trop incertaine
 DEFAULT_CLEAR_SCALE = 0.55
 
@@ -146,10 +153,49 @@ def fit_calibration(samples: list[tuple[float, float, float]], prior: float = 6.
     return max(-1.0, min(1.5, a)), max(0.6, min(1.6, b))
 
 
+def fit_offset(samples: list[tuple[float, float, float]], prior_sd: float = PLAN_OFFSET_PRIOR_SD) -> float:
+    """Décalage d (en logit) qui ajuste au mieux P = sigmoïde(z + d) à des (z, résultat, poids), resserré vers 0."""
+    d = 0.0
+    for _ in range(50):
+        g, h = -d / prior_sd ** 2, 1 / prior_sd ** 2
+        for z, o, w in samples:
+            p = sigmoid(z + d)
+            g += w * (o - p)
+            h += w * p * (1 - p)
+        step = g / h
+        d += step
+        if abs(step) < 1e-6:
+            break
+    return max(-PLAN_OFFSET_MAX, min(PLAN_OFFSET_MAX, d))
+
+
 def load_calibration(conn) -> tuple[float, float]:
+    """(a, b) des chances affichées et utilisées pour choisir les maps, correction des séances comprise."""
     from . import db  # import tardif : db importe rating
     cal = db.get_meta(conn, "calibration")
-    return (cal["a"], cal["b"]) if cal else (0.0, 1.0)
+    return (cal["a"] + cal.get("plan_offset", 0.0), cal["b"]) if cal else (0.0, 1.0)
+
+
+def planned_first_attempts(conn, recent: int = PLAN_OFFSET_RECENT) -> list[int]:
+    """Parties qui sont le premier essai du jour d'une map du programme (rôles dont les chances visent l'objectif),
+    des plus récentes aux plus anciennes."""
+    from . import db
+    plans = conn.execute(
+        f"SELECT DISTINCT day, beatmap_id FROM session_plan WHERE role IN ({','.join('?' * len(PLAN_ROLES))})",
+        PLAN_ROLES).fetchall()
+    if not plans:
+        return []
+    wanted = {(r["day"], r["beatmap_id"]) for r in plans}
+    first = {}
+    for r in conn.execute(
+        f"""SELECT score_id, beatmap_id, ended_at FROM scores
+            WHERE countable = 1 AND NOT abandoned AND source != 'inferred_fail'
+              AND beatmap_id IN ({','.join('?' * len({b for _, b in wanted}))}) ORDER BY ended_at""",
+            sorted({b for _, b in wanted})):
+        key = (db.local_day(r["ended_at"]), r["beatmap_id"])
+        if key in wanted and key not in first:
+            first[key] = (r["ended_at"], r["score_id"])
+    return [sid for _, sid in sorted(first.values(), reverse=True)][:recent]
 
 
 def update_calibration(conn, recent: int = 300) -> dict:
@@ -167,5 +213,13 @@ def update_calibration(conn, recent: int = 300) -> dict:
         # Résultat binaire : « objectif atteint » (outcome = 1) ou non. C'est ce que le planificateur prédit.
         a, b = fit_calibration([(logit(r["p"]), 1.0 if r["o"] >= 0.999 else 0.0, r["w"]) for r in rows])
         cal = {"a": round(a, 3), "b": round(b, 3), "n": len(rows)}
+    planned = planned_first_attempts(conn)
+    if planned:
+        events = conn.execute(
+            f"SELECT expected AS p, outcome AS o, weight AS w FROM rating_events WHERE score_id IN "
+            f"({','.join('?' * len(planned))})", planned).fetchall()
+        offset = fit_offset([(cal["a"] + cal["b"] * logit(r["p"]), 1.0 if r["o"] >= 0.999 else 0.0, r["w"])
+                             for r in events])
+        cal |= {"plan_offset": round(offset, 3), "plan_n": len(planned)}
     db.set_meta(conn, "calibration", cal)
     return cal
