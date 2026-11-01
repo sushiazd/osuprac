@@ -31,9 +31,9 @@ from datetime import datetime, timedelta
 from . import db, fmt, model, pp, progression
 from .model import CALIBRATED_GAMES, DEFAULT_CLEAR_SCALE
 from .rating import HP_REF, effective_stars
-from .skills import CATEGORIES, CLEAN_FINISH, CRITERIA, LABELS
+from .skills import CATEGORIES, CLEAN_FINISH, CRITERIA, LABELS, expected_ar, ramp
 
-PLAN_FORMAT = 22               # à incrémenter quand l'algorithme change
+PLAN_FORMAT = 23               # à incrémenter quand l'algorithme change
 # intensité -> (chances de FINIR la map visées, chances d'atteindre l'OBJECTIF de précision visées)
 # « équilibré » est le réglage le plus robuste en simulation (meilleure moyenne et meilleur pire cas
 # sous quatre hypothèses d'apprentissage, voir tools/simulate_training.py).
@@ -57,6 +57,8 @@ MIN_LENGTH_S = 60             # sous une minute (extraits de 12 s…), trop peu 
 STRETCH_MAX_S = 180           # un défi se rejoue souvent : une map de 5 min mangeait le tiers d'une séance de 45 min
 STRETCH_MAX_ABOVE = 0.6       # défi au plus 0,6★ au-dessus de ton niveau de passe : sinon une jauge de vie quasi nulle
                               # faisait passer une 5,4★ (pour un niveau de 4,2★) pour un défi « jouable »
+READING_AR_BELOW = (4.0, 2.5)  # AR sous l'habituel à ton niveau : au-delà de 2,5 le reading compte moins, de 4 à peine
+READING_MIN_RELEVANCE = 0.25  # (training_weights)
 DRIFT_TOLERANCE = 0.30        # une map d'entraînement prévue est remplacée si ses chances s'écartent de plus de 30 pts
 WARM_MIN_P, WARM_MIN_FINISH = 0.65, 0.85  # échauffement : objectif probable, map finie presque à coup sûr
 # Zone de confort : les réglages (AR, CS, HP) que tu supportes, mesurés sur les maps que tu as réellement finies.
@@ -184,6 +186,20 @@ def comfort_factor(c: Cand, comfort: dict, dislikes: list) -> float:
     return max(MIN_COMFORT_FACTOR, factor)
 
 
+def training_weights(c: Cand, level: float) -> dict:
+    """Poids des compétences que la map fait travailler POUR TOI.
+
+    Le reading d'une map vient d'un AR inhabituel pour ses étoiles. À ton niveau, celui que tu croiseras est un AR
+    un peu bas (AR 6-8 sur les maps de 4-5★, mesuré sur le catalogue) : une Normal à 3★ en AR 3 en a beaucoup, mais
+    lire des cercles aussi lents n'aide pas à lire tes prochaines maps. Son reading compte donc moins.
+    """
+    if c.ar is None or "reading" not in c.weights:
+        return c.weights
+    usual = expected_ar(level)
+    relevance = max(READING_MIN_RELEVANCE, ramp(c.ar, usual - READING_AR_BELOW[0], usual - READING_AR_BELOW[1]))
+    return c.weights if relevance >= 1 else {**c.weights, "reading": c.weights["reading"] * relevance}
+
+
 def freshness(h: History) -> float:
     """Intérêt de (re)jouer une map d'après ton historique avec elle."""
     if h.attempts == 0:
@@ -309,6 +325,13 @@ def plan(ctx: Context, cands: list[Cand]) -> tuple[list[Item], dict]:
     p_cache = {c.beatmap_id: model.p_map(c.weights, ctx.ratings, effective_stars(c.stars, c.hp), ctx.calib)
                for c in cands}
     hist = lambda c: ctx.history.get(c.beatmap_id, History())
+    train_cache: dict[int, dict] = {}
+
+    def trains(c: Cand) -> dict:
+        """Ce que la map te fait travailler (les chances, elles, restent calculées sur la map telle qu'elle est)."""
+        if c.beatmap_id not in train_cache:
+            train_cache[c.beatmap_id] = training_weights(c, ctx.level)
+        return train_cache[c.beatmap_id]
     chosen: list[Item] = []
     used_sets: set[int] = set()
     creators: Counter = Counter()
@@ -316,7 +339,7 @@ def plan(ctx: Context, cands: list[Cand]) -> tuple[list[Item], dict]:
     taken: set[int] = set()
 
     def top_skill(c: Cand) -> str:
-        return max(c.weights, key=lambda s: shares.get(s, 0) * c.weights[s])
+        return max(trains(c), key=lambda s: shares.get(s, 0) * trains(c)[s])
 
     def usable(c: Cand) -> bool:
         return (c.beatmap_id not in taken and c.set_id not in used_sets
@@ -343,7 +366,7 @@ def plan(ctx: Context, cands: list[Cand]) -> tuple[list[Item], dict]:
         used_sets.add(c.set_id)
         if c.creator:
             creators[c.creator] += 1
-        for s, w in c.weights.items():
+        for s, w in trains(c).items():
             load[s] += w
         return item
 
@@ -373,13 +396,13 @@ def plan(ctx: Context, cands: list[Cand]) -> tuple[list[Item], dict]:
     test_minutes = 0.0
     unmeasured = sorted((s for s in CATEGORIES if ctx.games[s] < CALIBRATED_GAMES), key=lambda s: ctx.games[s])
     for s in unmeasured[:MAX_TESTS]:
-        pool = [c for c in cands if usable(c) and c.weights.get(s, 0) >= 0.4
+        pool = [c for c in cands if usable(c) and trains(c).get(s, 0) >= 0.4
                 and c.length_s <= 300 and model.duration_factor(c.length_s) >= 0.9]
         if not pool:
             continue
         def info(c, s=s):
             ps = model.p_skill(ctx.ratings[s], c.stars, ctx.calib)
-            return c.weights[s] * model.bump(ps, 0.5, 0.2) * base(c)
+            return trains(c)[s] * model.bump(ps, 0.5, 0.2) * base(c)
         it = take(max(pool, key=info), "Test de niveau", s)
         test_minutes += it.minutes
 
@@ -397,7 +420,7 @@ def plan(ctx: Context, cands: list[Cand]) -> tuple[list[Item], dict]:
 
     def main_value(c: Cand) -> float:
         p = p_cache[c.beatmap_id]
-        skills = sum(shares.get(s, 0) * w * DIMINISH ** load[s] for s, w in c.weights.items())
+        skills = sum(shares.get(s, 0) * w * DIMINISH ** load[s] for s, w in trains(c).items())
         tier = TIER_BONUS if c.beatmap_id in ctx.tier_open else 1.0
         minutes = model.minutes_for(c.length_s, attempts_expected("Entraînement", p))
         return skills * learn(c) * base(c) * tier / math.sqrt(minutes)
@@ -424,7 +447,7 @@ def plan(ctx: Context, cands: list[Cand]) -> tuple[list[Item], dict]:
 
     # 3. Montée : près de ta limite, des maps que tu finis environ 6 fois sur 10, de préférence qui rapportent des pp.
     def climb_value(c: Cand) -> float:
-        skills = sum(shares.get(s, 0) * w * DIMINISH ** load[s] for s, w in c.weights.items())
+        skills = sum(shares.get(s, 0) * w * DIMINISH ** load[s] for s, w in trains(c).items())
         gain = 1.0
         if c.pp_fc and ctx.top_pp > 0:  # une map dont le full combo entrerait haut dans ton top vaut plus
             gain = min(1.5, max(0.7, fc_pp_at(c.pp_fc, ctx.typical_acc) / ctx.top_pp))
@@ -447,7 +470,7 @@ def plan(ctx: Context, cands: list[Cand]) -> tuple[list[Item], dict]:
     clear_level = ctx.clear_level if ctx.clear_level is not None else ctx.level
     def stretch_value(c: Cand) -> float:
         p_clear = p_finish_of(c) if ctx.clear_level is not None else model.sigmoid((clear_level - c.stars) / ctx.clear_scale)
-        skills = sum(shares.get(s, 0) * w * DIMINISH ** load[s] for s, w in c.weights.items())
+        skills = sum(shares.get(s, 0) * w * DIMINISH ** load[s] for s, w in trains(c).items())
         return skills * model.bump(p_clear, 0.4, 0.15) * base(c)
     pool = [c for c in cands if usable(c) and c.stars >= clear_level - 0.1 and p_cache[c.beatmap_id] <= 0.55
             and c.length_s <= STRETCH_MAX_S and c.stars <= clear_level + STRETCH_MAX_ABOVE]
@@ -462,10 +485,10 @@ def plan(ctx: Context, cands: list[Cand]) -> tuple[list[Item], dict]:
     if review_skills and B >= 35 and "Révision" not in ctx.done_roles:
         total7 = sum(ctx.load7d.values()) or 1.0
         s = min(review_skills, key=lambda k: (ctx.load7d.get(k, 0.0) / total7) / parts[k]["importance"])
-        pool = [c for c in cands if usable(c) and c.weights.get(s, 0) >= 0.4 and c.length_s <= 240]
+        pool = [c for c in cands if usable(c) and trains(c).get(s, 0) >= 0.4 and c.length_s <= 240]
         if pool:
             def review_value(c, s=s):
-                return c.weights[s] * model.bump(p_cache[c.beatmap_id], 0.72, 0.12) * base(c)
+                return trains(c)[s] * model.bump(p_cache[c.beatmap_id], 0.72, 0.12) * base(c)
             take(max(pool, key=review_value), "Révision", s)
 
     # 6. Échauffement : facile, court, dans ta compétence la plus solide (placé en tête de séance).

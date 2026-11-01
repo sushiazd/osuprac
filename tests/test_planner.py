@@ -191,3 +191,20 @@ def test_a_challenge_is_not_a_far_harder_map_with_an_empty_health_bar():
     items, _ = plan(context(hp_k=0.3), cands)
     defi = next(i for i in items if i.role == "Défi")
     assert defi.beatmap_id < 950
+
+
+def test_reading_is_trained_on_the_slow_approach_you_will_actually_meet():
+    """À 3,5★, tes prochaines maps de reading sont en AR 6-8 : une map en AR 3 n'entraîne presque pas ce reading-là,
+    même si elle est plus populaire."""
+    ratings = {s: 3.0 for s in CATEGORIES} | {"reading": 2.4}
+    cands = candidates() + [Cand(beatmap_id=1000 + i, set_id=1000 + i, creator=f"r{i}", stars=3.0 + (i % 10) * 0.05,
+                                 weights={"reading": 0.8, "aim": 0.2}, length_s=120,
+                                 playcount=1_000_000 if i % 2 else 10_000, favourites=10_000 if i % 2 else 100,
+                                 ar=3.0 if i % 2 else 6.5)
+                            for i in range(40)]
+    items, _ = plan(context(ratings=ratings), cands)
+    reading = [i.beatmap_id for i in items if i.category == "reading"]
+    assert reading and all(b % 2 == 0 for b in reading if b >= 1000)
+    slow = next(c for c in cands if c.ar == 3.0)
+    assert planner.training_weights(slow, 3.5)["reading"] < slow.weights["reading"] / 2
+    assert planner.training_weights(cands[-2], 3.5) == cands[-2].weights   # AR 6,5 : rien ne change
