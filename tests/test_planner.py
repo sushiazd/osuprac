@@ -168,3 +168,26 @@ def test_joke_maps_with_absurd_settings_are_never_proposed():
     items, _ = plan(context(), cands)
     assert joke.beatmap_id not in [i.beatmap_id for i in items]
     assert planner.is_gimmick(joke) and not planner.is_gimmick(_cand())
+
+
+def test_tiny_maps_and_very_long_challenges_are_never_proposed():
+    """Un extrait de 12 s ne fait rien travailler ; un défi de 5 min, rejoué plusieurs fois, mange la séance."""
+    cands = candidates()
+    for c in cands[:40]:
+        c.length_s = 12
+    for c in cands[40:80]:
+        c.length_s = 300
+    items, _ = plan(context(), cands)
+    assert all(i.beatmap_id >= 40 for i in items)
+    defi = [i for i in items if i.role == "Défi"]
+    assert defi and all(not 40 <= i.beatmap_id < 80 for i in defi)
+
+
+def test_a_challenge_is_not_a_far_harder_map_with_an_empty_health_bar():
+    """HP 1 : une map bien trop dure paraît « finissable » ; le défi reste juste au-dessus de ton niveau."""
+    cands = candidates() + [Cand(beatmap_id=950 + i, set_id=950 + i, creator=f"h{i}", stars=4.55 + i * 0.05,
+                                 weights={"aim": 1.0}, length_s=120, playcount=10_000, favourites=100, hp=1.0)
+                            for i in range(5)]
+    items, _ = plan(context(hp_k=0.3), cands)
+    defi = next(i for i in items if i.role == "Défi")
+    assert defi.beatmap_id < 950

@@ -33,7 +33,7 @@ from .model import CALIBRATED_GAMES, DEFAULT_CLEAR_SCALE
 from .rating import HP_REF, effective_stars
 from .skills import CATEGORIES, CLEAN_FINISH, CRITERIA, LABELS
 
-PLAN_FORMAT = 21               # à incrémenter quand l'algorithme change
+PLAN_FORMAT = 22               # à incrémenter quand l'algorithme change
 # intensité -> (chances de FINIR la map visées, chances d'atteindre l'OBJECTIF de précision visées)
 # « équilibré » est le réglage le plus robuste en simulation (meilleure moyenne et meilleur pire cas
 # sous quatre hypothèses d'apprentissage, voir tools/simulate_training.py).
@@ -53,6 +53,10 @@ LEVEL_FLOOR_BELOW = 0.8       # jamais de map à plus de 0,8★ sous la moyenne 
 CLIMB_SHARE = 0.35            # part de la séance jouée près de ta limite (« Montée »)
 CLIMB_FINISH, CLIMB_WIDTH = 0.62, 0.15  # … sur des maps que tu finis proprement environ 6 fois sur 10
 CLIMB_MAX_ABOVE = 0.35        # … sans dépasser ton niveau de passe de plus de 0,35★
+MIN_LENGTH_S = 60             # sous une minute (extraits de 12 s…), trop peu de notes pour apprendre ou juger la précision
+STRETCH_MAX_S = 180           # un défi se rejoue souvent : une map de 5 min mangeait le tiers d'une séance de 45 min
+STRETCH_MAX_ABOVE = 0.6       # défi au plus 0,6★ au-dessus de ton niveau de passe : sinon une jauge de vie quasi nulle
+                              # faisait passer une 5,4★ (pour un niveau de 4,2★) pour un défi « jouable »
 DRIFT_TOLERANCE = 0.30        # une map d'entraînement prévue est remplacée si ses chances s'écartent de plus de 30 pts
 WARM_MIN_P, WARM_MIN_FINISH = 0.65, 0.85  # échauffement : objectif probable, map finie presque à coup sûr
 # Zone de confort : les réglages (AR, CS, HP) que tu supportes, mesurés sur les maps que tu as réellement finies.
@@ -294,7 +298,7 @@ def plan(ctx: Context, cands: list[Cand]) -> tuple[list[Item], dict]:
     levels = list((ctx.levels or ctx.ratings).values())
     floor = max(ctx.level - 1.6, statistics.mean(levels) - LEVEL_FLOOR_BELOW) if levels else ctx.level - 1.6
     cands = [c for c in cands if c.beatmap_id not in ctx.exclude and not is_gimmick(c)
-             and floor <= c.stars <= ctx.level + 1.3 and c.length_s > 0
+             and floor <= c.stars <= ctx.level + 1.3 and c.length_s >= MIN_LENGTH_S
              and (p_finish_of(c) is None or p_finish_of(c) >= PLAN_FINISH_FLOOR)]
     shares, parts = skill_shares(ctx, cands)
     summary = {"shares": shares, "parts": parts, "level": ctx.level, "budget": ctx.budget_min,
@@ -444,8 +448,9 @@ def plan(ctx: Context, cands: list[Cand]) -> tuple[list[Item], dict]:
     def stretch_value(c: Cand) -> float:
         p_clear = p_finish_of(c) if ctx.clear_level is not None else model.sigmoid((clear_level - c.stars) / ctx.clear_scale)
         skills = sum(shares.get(s, 0) * w * DIMINISH ** load[s] for s, w in c.weights.items())
-        return skills * model.bump(p_clear, 0.4, 0.15) * base(c) * (1.0 if c.length_s <= 300 else 0.6)
-    pool = [c for c in cands if usable(c) and c.stars >= clear_level - 0.1 and p_cache[c.beatmap_id] <= 0.55]
+        return skills * model.bump(p_clear, 0.4, 0.15) * base(c)
+    pool = [c for c in cands if usable(c) and c.stars >= clear_level - 0.1 and p_cache[c.beatmap_id] <= 0.55
+            and c.length_s <= STRETCH_MAX_S and c.stars <= clear_level + STRETCH_MAX_ABOVE]
     if pool and B >= 25 and "Défi" not in ctx.done_roles:
         c = max(pool, key=stretch_value)
         take(c, "Défi", top_skill(c))
