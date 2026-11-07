@@ -33,7 +33,7 @@ from .model import CALIBRATED_GAMES, DEFAULT_CLEAR_SCALE
 from .rating import HP_REF, effective_stars
 from .skills import CATEGORIES, CLEAN_FINISH, CRITERIA, LABELS, expected_ar, ramp
 
-PLAN_FORMAT = 23               # à incrémenter quand l'algorithme change
+PLAN_FORMAT = 24               # à incrémenter quand l'algorithme change
 # intensité -> (chances de FINIR la map visées, chances d'atteindre l'OBJECTIF de précision visées)
 # « équilibré » est le réglage le plus robuste en simulation (meilleure moyenne et meilleur pire cas
 # sous quatre hypothèses d'apprentissage, voir tools/simulate_training.py).
@@ -71,6 +71,14 @@ COMFORT_STRENGTH = 0.5
 COMFORT_MIN_MAPS = 20          # en dessous, pas assez de maps finies pour définir une zone de confort
 DISLIKE_STRENGTH = 0.3         # une map écartée à ta demande baisse d'autant (au plus) ses sosies
 MIN_COMFORT_FACTOR = 0.35
+MAX_REPEAT_DAYS = 3           # une map jouée sur 3 jours différents n'apprend plus grand-chose (Cat Loving : 72, 73, 79, 75, 72 %)
+REPEAT_FACTOR = 0.2           # … elle laisse sa place à une nouvelle (les maps de palier restent jouables jusqu'au bout)
+WEAK_GAP = 0.05               # une compétence au moins 0,05★ sous la moyenne des autres est « en retard »
+WEAK_SLOTS = 2                # maps d'entraînement réservées chaque jour aux compétences en retard les moins travaillées
+WEAK_MIN_WEIGHT = 0.45        # … qui doivent vraiment faire travailler cette compétence
+WEAK_MIN_LEARN = 0.3          # … à la bonne difficulté : mieux vaut passer son tour qu'imposer une map hors de portée
+WEAK_MAX_MIN = 6.0            # … et pas plus de 6 min (essais compris) : une map d'endurance de 8 min mangeait le quart de la séance
+WEAK_MAX_S = 270              # … et rester courtes : une map d'endurance de 8 min mangeait à elle seule le travail du jour
 CAND_BELOW, CAND_ABOVE = 2.0, 1.5  # maps candidates : de 2★ sous ta compétence la plus faible à 1,5★ au-dessus de la plus forte
 
 
@@ -100,6 +108,7 @@ class History:
     met: bool = False
     days_since: float | None = None
     best_acc: float | None = None
+    days_played: int = 0          # nombre de jours différents où tu l'as jouée
 
 
 @dataclass
@@ -200,10 +209,12 @@ def training_weights(c: Cand, level: float) -> dict:
     return c.weights if relevance >= 1 else {**c.weights, "reading": c.weights["reading"] * relevance}
 
 
-def freshness(h: History) -> float:
+def freshness(h: History, tier: bool = False) -> float:
     """Intérêt de (re)jouer une map d'après ton historique avec elle."""
     if h.attempts == 0:
         return 1.0
+    if h.days_played >= MAX_REPEAT_DAYS and not tier:
+        return REPEAT_FACTOR  # on la connaît par cœur : mieux vaut en changer
     days = h.days_since if h.days_since is not None else 99.0
     if h.met:
         return 0.15 if days < 1 else 0.35 if days < 14 else 0.7
@@ -376,7 +387,7 @@ def plan(ctx: Context, cands: list[Cand]) -> tuple[list[Item], dict]:
         if c.beatmap_id not in comfort:
             comfort[c.beatmap_id] = comfort_factor(c, ctx.comfort, ctx.dislikes)
         return (model.quality(c.playcount, c.favourites) * model.duration_factor(c.length_s, c.weights.get("stamina", 0))
-                * freshness(hist(c)) * (1 + 0.10 * noise(ctx.seed, c.beatmap_id)) * comfort[c.beatmap_id])
+                * freshness(hist(c), c.beatmap_id in ctx.tier_open) * (1 + 0.10 * noise(ctx.seed, c.beatmap_id)) * comfort[c.beatmap_id])
 
     B = ctx.budget_min
     warm_budget = 0.0 if ctx.warmed_up else 0.08 * B
@@ -443,6 +454,22 @@ def plan(ctx: Context, cands: list[Cand]) -> tuple[list[Item], dict]:
             take(pick, role, ctx.tier_open[pick.beatmap_id][0] if role == "Objectif" else top_skill(pick))
 
     work_minutes = lambda: sum(i.minutes for i in chosen if i.role in ("Entraînement", "Objectif"))
+
+    # 2b. Compétences en retard : quelques maps leur sont réservées, sinon l'aim (présent dans presque toutes les maps)
+    #     accapare tout le programme. Celles que tu as le moins travaillées ces 7 jours, par rapport à leur part, d'abord.
+    total7 = sum(ctx.load7d.values()) or 1.0
+    weak = [s for s in CATEGORIES if parts[s]["gap"] >= WEAK_GAP and ctx.games[s] >= CALIBRATED_GAMES]
+    weak.sort(key=lambda s: (ctx.load7d.get(s, 0.0) / total7) / max(shares[s], 0.02))
+    est = lambda c: model.minutes_for(c.length_s, attempts_expected("Entraînement", p_cache[c.beatmap_id]))
+    for s in weak[:WEAK_SLOTS]:
+        if load[s] >= 1.0:
+            continue
+        slot = [c for c in pool if usable(c) and trains(c).get(s, 0.0) >= WEAK_MIN_WEIGHT and c.length_s <= WEAK_MAX_S
+                and est(c) <= WEAK_MAX_MIN and learn(c) >= WEAK_MIN_LEARN
+                and work_minutes() + est(c) <= main_budget * 0.9 + 1.0]
+        if slot:
+            pick = max(slot, key=lambda c, s=s: trains(c)[s] * learn(c) * base(c) / math.sqrt(est(c)))
+            take(pick, "Objectif" if pick.beatmap_id in ctx.tier_open else "Entraînement", s)
     add_main(main_budget, work_minutes)
 
     # 3. Montée : près de ta limite, des maps que tu finis environ 6 fois sur 10, de préférence qui rapportent des pp.
@@ -481,10 +508,9 @@ def plan(ctx: Context, cands: list[Cand]) -> tuple[list[Item], dict]:
     # 5. Révision espacée : la compétence la moins travaillée récemment parmi les moins prioritaires.
     top2 = sorted(shares, key=shares.get, reverse=True)[:2]
     # La révision apporte une compétence différente de celles déjà travaillées dans la séance (variété).
-    review_skills = [s for s in CATEGORIES if s not in top2 and ctx.games[s] >= CALIBRATED_GAMES and load[s] < 0.8]
-    if review_skills and B >= 35 and "Révision" not in ctx.done_roles:
-        total7 = sum(ctx.load7d.values()) or 1.0
-        s = min(review_skills, key=lambda k: (ctx.load7d.get(k, 0.0) / total7) / parts[k]["importance"])
+    review_skills = [s for s in CATEGORIES if s not in top2 and ctx.games[s] >= CALIBRATED_GAMES and load[s] < 0.4]
+    if review_skills and B >= 25 and "Révision" not in ctx.done_roles:
+        s = min(review_skills, key=lambda k: (ctx.load7d.get(k, 0.0) / total7) / max(shares[k], 0.02))
         pool = [c for c in cands if usable(c) and trains(c).get(s, 0) >= 0.4 and c.length_s <= 240]
         if pool:
             def review_value(c, s=s):
@@ -583,6 +609,13 @@ def load_history(conn, cands: list[Cand], day: str) -> dict[int, History]:
     by_id = {c.beatmap_id: c for c in cands}
     today = datetime.fromisoformat(day).date()
     out = {}
+    played_days: dict[int, set] = {}
+    for r in conn.execute(
+        """SELECT beatmap_id, ended_at FROM scores
+           WHERE countable = 1 AND NOT abandoned AND source != 'inferred_fail'"""
+    ):
+        if r["beatmap_id"] in by_id:
+            played_days.setdefault(r["beatmap_id"], set()).add(db.local_day(r["ended_at"]))
     for r in conn.execute(
         """SELECT beatmap_id, count(*) AS n, max(ended_at) AS last FROM scores
            WHERE countable = 1 AND NOT abandoned AND source != 'inferred_fail' GROUP BY beatmap_id"""
@@ -593,7 +626,8 @@ def load_history(conn, cands: list[Cand], day: str) -> dict[int, History]:
         top = max(c.weights, key=c.weights.get)
         best = progression.best_result(conn, c.beatmap_id, CRITERIA[top])
         days = (today - datetime.fromisoformat(db.local_day(r["last"])).date()).days
-        out[c.beatmap_id] = History(r["n"], bool(best and best["met"]), float(days), best["accuracy"] if best else None)
+        out[c.beatmap_id] = History(r["n"], bool(best and best["met"]), float(days), best["accuracy"] if best else None,
+                                    len(played_days.get(c.beatmap_id, ())))
     return out
 
 
@@ -643,7 +677,8 @@ def settings(conn) -> dict:
 
 
 def build_context(conn, ratings: dict, day: str, exclude: set, cands: list[Cand]) -> Context:
-    clear = db.get_meta(conn, "clear_level")
+    shift = model.finish_shift(conn)
+    clear = model.shifted(db.get_meta(conn, "clear_level"), shift)
     mean = sum(ratings[s]["rating"] for s in CATEGORIES) / len(CATEGORIES)
     cfg = settings(conn)
     variant = db.get_meta(conn, "session_variant", {}).get(day, 0)
@@ -670,7 +705,7 @@ def build_context(conn, ratings: dict, day: str, exclude: set, cands: list[Cand]
         target_finish=INTENSITY[cfg["intensity"]][0], target_meet=INTENSITY[cfg["intensity"]][1],
         seed=f"{day}-{variant}", calib=model.load_calibration(conn),
         clear_level=clear["level"] if clear else None, clear_scale=(clear or {}).get("scale", DEFAULT_CLEAR_SCALE),
-        clean=db.get_meta(conn, "clean_level"),
+        clean=model.shifted(db.get_meta(conn, "clean_level"), shift),
         hp_k=(clear or {}).get("hp_k", 0.0),
         load2d=l2, load7d=l7, history=load_history(conn, cands, day),
         tier_open=tier_open, exam=exam, exam_level_c=state["target_c"], exclude=set(exclude),
@@ -795,7 +830,8 @@ def model_fingerprint(conn, ratings: dict) -> list:
     clean = db.get_meta(conn, "clean_level") or {}
     a, b = model.load_calibration(conn)
     return ([round(ratings[s]["rating"], 1) for s in CATEGORIES if s in ratings]
-            + [round(a, 1), round(b, 1), round(clear.get("level", 0), 1), round(clean.get("level", 0), 1)])
+            + [round(a, 1), round(b, 1), round(clear.get("level", 0), 1), round(clean.get("level", 0), 1),
+               round(model.finish_shift(conn), 1)])
 
 
 def still_fits(role: str, p_meet: float, p_finish: float | None, target_meet: float) -> bool:
@@ -819,8 +855,9 @@ def refresh_pending(conn, ratings: dict, cfg: dict, rows) -> list[dict]:
     info = {r["beatmap_id"]: r for r in conn.execute(
         f"SELECT beatmap_id, stars, weights, attrs FROM map_attrs WHERE mods_key = '' AND beatmap_id IN "
         f"({','.join('?' * len(ids))})", ids)}
-    clear = db.get_meta(conn, "clear_level")
-    clean = db.get_meta(conn, "clean_level") or clear
+    shift = model.finish_shift(conn)
+    clear = model.shifted(db.get_meta(conn, "clear_level"), shift)
+    clean = model.shifted(db.get_meta(conn, "clean_level"), shift) or clear
     calib = model.load_calibration(conn)
     current = {s: v["rating"] for s, v in ratings.items()}
     target_meet = INTENSITY[cfg["intensity"]][1]

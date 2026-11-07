@@ -208,3 +208,42 @@ def test_reading_is_trained_on_the_slow_approach_you_will_actually_meet():
     slow = next(c for c in cands if c.ar == 3.0)
     assert planner.training_weights(slow, 3.5)["reading"] < slow.weights["reading"] / 2
     assert planner.training_weights(cands[-2], 3.5) == cands[-2].weights   # AR 6,5 : rien ne change
+
+
+def test_a_map_played_on_three_different_days_makes_room_for_a_new_one():
+    """Cat Loving : 72, 73, 79, 75, 72 % en 5 séances. Passé 3 jours, une map ne rapporte plus rien."""
+    known = planner.History(attempts=6, met=False, days_since=1.0, days_played=3)
+    fresh = planner.History(attempts=0)
+    assert planner.freshness(known) < planner.freshness(planner.History(attempts=4, met=False, days_since=1.0,
+                                                                        days_played=2)) / 3
+    assert planner.freshness(known) < planner.freshness(fresh) / 3
+    assert planner.freshness(known, tier=True) > planner.freshness(known)   # une map de palier se joue jusqu'au bout
+    ctx = context(history={i: planner.History(attempts=6, met=False, days_since=1.0, days_played=3)
+                           for i in range(0, 300, 2)})
+    items, _ = plan(ctx, candidates())
+    # une préférence, pas une interdiction : une map connue ne passe que faute de mieux (au plus 2 sur la séance)
+    assert sum(1 for i in items if i.beatmap_id % 2 == 0) <= 2
+
+
+def test_lagging_skills_get_reserved_training_slots():
+    """L'aim est dans presque toutes les maps : sans quota, il accapare le programme et les points faibles attendent."""
+    ratings = {s: 3.6 for s in CATEGORIES} | {"reading": 3.0, "stamina": 3.1, "tech": 3.2}
+    cands = [Cand(beatmap_id=i, set_id=i, creator=f"m{i}", stars=3.0 + (i % 30) * 0.04, weights=w, length_s=100,
+                  playcount=50_000, favourites=500)
+             for i in range(240)
+             for w in [{CATEGORIES[i % len(CATEGORIES)]: 0.7, "aim": 0.3} if CATEGORIES[i % len(CATEGORIES)] != "aim"
+                       else {"aim": 1.0}]]
+    items, _ = plan(context(ratings=ratings, levels=ratings, level=3.8, clear_level=3.8, budget_min=30), cands)
+    lagging = [i.category for i in items if i.role in ("Entraînement", "Objectif")
+               and i.category in ("reading", "stamina", "tech")]
+    assert len(lagging) >= planner.WEAK_SLOTS
+
+
+def test_a_lagging_skill_is_skipped_rather_than_given_an_impossible_map():
+    ratings = {s: 3.6 for s in CATEGORIES} | {"stamina": 3.0}
+    cands = [Cand(beatmap_id=i, set_id=i, creator=f"m{i}", stars=3.0 + (i % 30) * 0.04, weights={"aim": 1.0},
+                  length_s=100, playcount=50_000, favourites=500) for i in range(120)]
+    cands.append(Cand(beatmap_id=999, set_id=999, creator="x", stars=6.5, weights={"stamina": 1.0}, length_s=200,
+                      playcount=50_000, favourites=500))
+    items, _ = plan(context(ratings=ratings, levels=ratings, level=3.8, clear_level=3.8), cands)
+    assert 999 not in {i.beatmap_id for i in items}

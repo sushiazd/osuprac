@@ -3,6 +3,7 @@
 Fonctions pures (sans accès à la base), utilisées par le planificateur d'entraînement et par le
 choix des maps de palier.
 """
+import json
 import math
 
 from .rating import HP_REF, SCALE
@@ -15,6 +16,12 @@ PLAN_ROLES = ("Échauffement", "Entraînement", "Objectif", "Révision", "Test d
 PLAN_OFFSET_RECENT = 80     # derniers premiers essais pris en compte : la correction suit ta progression
 PLAN_OFFSET_PRIOR_SD = 0.5  # en logit : avec ~50 essais, l'écart mesuré est retenu aux trois quarts environ
 PLAN_OFFSET_MAX = 1.0
+# Même idée pour FINIR une map : sur les maps du programme jamais jouées avant (7 nov : 23 finies sur 25, alors que
+# ~75 % étaient prévus), ton niveau de passe retarde sur ta progression. On le relève de ce que montrent ces essais,
+# prudemment : au plus 0,5★, a priori resserré vers 0.
+FINISH_SHIFT_RECENT = 60
+FINISH_SHIFT_PRIOR_SD = 0.3   # en étoiles
+FINISH_SHIFT_RANGE = (-0.2, 0.5)
 CALIBRATED_GAMES = 3      # en dessous, la note d'une compétence est encore trop incertaine
 DEFAULT_CLEAR_SCALE = 0.55
 
@@ -196,6 +203,55 @@ def planned_first_attempts(conn, recent: int = PLAN_OFFSET_RECENT) -> list[int]:
         if key in wanted and key not in first:
             first[key] = (r["ended_at"], r["score_id"])
     return [sid for _, sid in sorted(first.values(), reverse=True)][:recent]
+
+
+def finish_shift(conn) -> float:
+    """Étoiles à ajouter à ton niveau de passe pour coller à ce que montrent tes séances (0 si pas assez d'essais).
+
+    On ne regarde que les maps du programme dont le premier essai de toute ta vie a eu lieu ce jour-là : une map déjà
+    connue se finit plus facilement et fausserait la mesure sur les maps nouvelles.
+    """
+    from . import db
+    clear = db.get_meta(conn, "clear_level")
+    if not clear:
+        return 0.0
+    wanted = {(r["day"], r["beatmap_id"]) for r in conn.execute(
+        "SELECT DISTINCT day, beatmap_id FROM session_plan WHERE role != 'Examen'")}
+    if not wanted:
+        return 0.0
+    ids = sorted({b for _, b in wanted})
+    marks = ",".join("?" * len(ids))
+    first = {}
+    for r in conn.execute(
+        f"""SELECT beatmap_id, passed, ended_at FROM scores
+            WHERE countable = 1 AND NOT abandoned AND source != 'inferred_fail' AND mods_key = ''
+              AND beatmap_id IN ({marks}) ORDER BY ended_at""", ids):
+        first.setdefault(r["beatmap_id"], r)  # tout premier essai de la map
+    fresh = sorted(((r["ended_at"], b, r["passed"]) for b, r in first.items()
+                    if (db.local_day(r["ended_at"]), b) in wanted), reverse=True)[:FINISH_SHIFT_RECENT]
+    if not fresh:
+        return 0.0
+    attrs = {r["beatmap_id"]: r for r in conn.execute(
+        f"SELECT beatmap_id, stars, attrs FROM map_attrs WHERE mods_key = '' AND beatmap_id IN "
+        f"({','.join('?' * len(fresh))})", [b for _, b, _ in fresh])}
+    scale = clear.get("scale", DEFAULT_CLEAR_SCALE)
+    samples = []
+    for _, b, passed in fresh:
+        m = attrs.get(b)
+        if m is None:
+            continue
+        hp = json.loads(m["attrs"]).get("hp", HP_REF)
+        samples.append((logit(finish_prob(m["stars"], hp, clear["level"], scale, clear.get("hp_k", 0.0))),
+                        1.0 if passed else 0.0, 1.0))
+    if not samples:
+        return 0.0
+    d = fit_offset(samples, FINISH_SHIFT_PRIOR_SD / scale) * scale
+    return round(max(FINISH_SHIFT_RANGE[0], min(FINISH_SHIFT_RANGE[1], d)), 3)
+
+
+def shifted(clear: dict | None, shift: float) -> dict | None:
+    """Niveau de passe (ou propre) relevé de `shift` étoiles ; inchangé s'il n'existe pas."""
+    return {**clear, "level": clear["level"] + shift} if clear and shift else clear
 
 
 def update_calibration(conn, recent: int = 300) -> dict:
