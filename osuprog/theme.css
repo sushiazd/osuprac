@@ -58,6 +58,9 @@
 
 /* ---------- Ligne de map (liste) ---------- */
 .op-row { display: flex; align-items: center; gap: 14px; min-width: 0; }
+/* Un titre long se coupe au lieu de renvoyer les boutons de la map à la ligne. */
+.stHorizontalBlock[class*="st-key-pick-"] { flex-wrap: nowrap; }
+.stHorizontalBlock[class*="st-key-pick-"] > .stElementContainer:first-child { flex: 1 1 0; min-width: 0; }
 .op-num { width: 18px; flex: none; text-align: right; color: var(--op-faint); font-variant-numeric: tabular-nums; font-size: 0.85rem; }
 .op-thumb { width: 54px; height: 40px; border-radius: 8px; flex: none; object-fit: cover; background: var(--op-surface-2); }
 .op-row-text { flex: 1; min-width: 0; }

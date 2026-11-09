@@ -5,7 +5,7 @@ import math
 import pandas as pd
 import streamlit as st
 
-from osuprog import db, pp, ppcalc, visuals
+from osuprog import db, pp, ppcalc, similar, visuals
 from osuprog.mods import mods_label
 from osuprog.ui import game_link
 
@@ -31,8 +31,27 @@ def hunt(target: float, accuracy: float, pool: str, last_sync: str) -> list[dict
     return found
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def similar_maps(beatmap_id: int, last_sync: str) -> dict | None:
+    """Mise en cache : la recherche parcourt le catalogue et lit des fichiers .osu. last_sync invalide le cache."""
+    c = db.connect()
+    found = similar.find(c, beatmap_id)
+    c.close()
+    return found
+
+
 def fr(value: float, digits: int = 0) -> str:
     return f"{value:.{digits}f}".replace(".", ",")
+
+
+def map_line(m: dict, sub: str, tip: str, key: str) -> None:
+    """Une map proposée, avec ses boutons (clés propres : une même map peut figurer dans plusieurs onglets)."""
+    with st.container(horizontal=True, vertical_alignment="center", gap="small", key=f"pick-{key}-{m['beatmap_id']}"):
+        st.html(visuals.pp_row(m, sub, tip))
+        st.link_button("", game_link(m["beatmap_id"]), type="tertiary", icon=":material/play_arrow:",
+                       help="Ouvrir dans osu!", key=f"{key}-play-{m['beatmap_id']}")
+        st.link_button("", f"https://osu.ppy.sh/beatmaps/{m['beatmap_id']}", type="tertiary",
+                       icon=":material/open_in_new:", help="Page de la map", key=f"{key}-page-{m['beatmap_id']}")
 
 
 st.title("pp")
@@ -50,7 +69,7 @@ else:
 if not exact:
     st.caption("Calcul approché (rosu-pp). Pour les valeurs exactes d'osu!, voir le Guide.")
 
-tab_goal, tab_calc, tab_best = st.tabs(["Objectif", "Calculateur", "Meilleures parties"])
+tab_goal, tab_similar, tab_calc, tab_best = st.tabs(["Objectif", "Similaires", "Calculateur", "Meilleures parties"])
 
 # --- Objectif : quelles maps pour faire X pp ----------------------------------------------------------
 with tab_goal:
@@ -80,12 +99,40 @@ with tab_goal:
         tip = (f"Full combo : {fr(fc, 1)} pp" + (f", 1 miss : {fr(by_miss[1], 1)}" if 1 in by_miss else "")
                + (f", 3 miss : {fr(by_miss[3], 1)}" if 3 in by_miss else "")
                + (f". Ton total gagnerait ≈ {fr(pp.gain_if(prof, fc))} pp." if prof else "."))
-        with st.container(horizontal=True, vertical_alignment="center", gap="small", key=f"hunt-{m['beatmap_id']}"):
-            st.html(visuals.pp_row({**m, "pp": fc}, sub, tip))
-            st.link_button("", game_link(m["beatmap_id"]), type="tertiary", icon=":material/play_arrow:",
-                           help="Ouvrir dans osu!")
-            st.link_button("", f"https://osu.ppy.sh/beatmaps/{m['beatmap_id']}", type="tertiary",
-                           icon=":material/open_in_new:", help="Page de la map")
+        map_line({**m, "pp": fc}, sub, tip, "hunt")
+
+# --- Similaires : des maps qui se jouent comme une map que tu aimes -----------------------------------
+with tab_similar:
+    wanted = st.text_input("Map que tu aimes", placeholder="Lien, numéro ou titre (ex. : starly)",
+                           help="Laisse vide pour choisir parmi tes meilleures parties.")
+    start = pp.parse_beatmap_id(wanted) if wanted else None
+    if start is None:
+        choices = pp.search_maps(conn, wanted) if wanted else (prof["scores"][:20] if prof else [])
+        if wanted and not choices:
+            st.info("Aucune map du catalogue ne correspond.")
+        names = {c["beatmap_id"]: f"{c['title']} [{c['version']}]"
+                 + (f" · {fr(c['stars'], 2)}★" if c["stars"] else "") for c in choices}
+        if names:
+            start = st.selectbox("Map", list(names), format_func=names.get, label_visibility="collapsed",
+                                 key=f"similar-start-{wanted}")
+    if st.button("Maps similaires", type="primary", icon=":material/search:", disabled=start is None):
+        st.session_state["similar_ref"] = start
+    if ref_id := st.session_state.get("similar_ref"):
+        with st.spinner("Comparaison des sauts et du rythme…"):
+            res = similar_maps(ref_id, str(db.get_meta(conn, "last_sync")))
+        if res is None:
+            st.info("Cette map n'est pas encore analysée : joue-la une fois, puis synchronise.")
+        elif not res["maps"]:
+            st.info("Aucune map assez proche que tu n'aies pas déjà jouée.")
+        else:
+            ref = res["ref"]
+            record = f" · ton record : {fr(ref['best_pp'], 1)} pp" if ref["best_pp"] else ""
+            st.markdown(f"**Comme {ref['title']} [{ref['version']}]** · {fr(ref['stars'], 2)}★{record}")
+            st.caption("pp d'un bon run à toi, d'après tes parties à ce niveau." if res["estimated"]
+                       else "pp d'un full combo à ta précision habituelle.")
+            for m in res["maps"]:
+                facts = [m["artist"]] + ([f"HP {fr(m['hp'], 1)}"] if m.get("hp") is not None else [])
+                map_line(m, " · ".join(facts), f"Full combo à 90 % : {fr(pp.fc_pp(m['attrs'], 0.9))} pp", "similar")
 
 # --- Calculateur ------------------------------------------------------------------------------------
 with tab_calc:

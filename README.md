@@ -35,7 +35,7 @@ Le tableau de bord s'ouvre dans le navigateur, avec 6 onglets :
 - **Aujourd'hui** : la map à jouer maintenant (bouton « Ouvrir dans osu! »), puis la suite de la séance. Le menu « … » d'une map permet de ne plus la proposer.
 - **Compétences** : tes 6 notes, leur évolution et ta précision au clic (d'après tes replays).
 - **Progression** : ton niveau, tes paliers et tes succès.
-- **pp** : tes pp par compétence (Aim, Tap, Acc, Reading) comme sur pp.huismetbenen.nl, les maps où un full combo te ferait atteindre un objectif de pp, et un calculateur (map, mods, précision, miss, combo).
+- **pp** : tes pp par compétence (Aim, Tap, Acc, Reading) comme sur pp.huismetbenen.nl, les maps où un full combo te ferait atteindre un objectif de pp, des maps similaires à une map que tu aimes, et un calculateur (map, mods, précision, miss, combo).
 - **Historique** : toutes tes parties et leur effet sur tes notes.
 - **Guide** : toutes les explications.
 

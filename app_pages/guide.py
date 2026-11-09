@@ -63,6 +63,12 @@ with st.expander("La recherche « Objectif »"):
         "celles où un full combo à ta précision atteint l'objectif. Les premières sont les plus accessibles : peu de "
         "miss attendus (d'après tes parties, selon les étoiles et la longueur), assez de chances de les finir (HP "
         "compris). Survole une map pour voir ses pp avec 1 ou 3 miss et ce que gagnerait ton total.")
+with st.expander("La recherche « Similaires »"):
+    st.markdown(
+        "Choisis une map que tu aimes : elle cherche des maps classées **que tu n'as pas encore jouées**, à ±0,5★, "
+        "de durée et de drain de vie proches. Elle compare l'aim, la vitesse, l'AR, la densité, puis **les sauts et "
+        "le rythme** mesurés dans les fichiers (la première recherche sur une map prend quelques secondes). Les pp "
+        "affichés sont ceux d'un bon run à toi : une estimation, pas une promesse. La musique n'est pas comparée.")
 
 st.subheader("La séance du jour")
 with st.expander("Comment les maps sont choisies"):
