@@ -22,7 +22,8 @@ echo Premiere installation : creation de l'environnement Python...
 if not exist ".venv\Scripts\python.exe" goto no_python
 
 :deps
-if exist ".venv\Scripts\streamlit.exe" goto lazer
+rem La fenetre du tableau de bord (pywebview) est arrivee apres coup : sa presence prouve que tout est a jour.
+if exist ".venv\Lib\site-packages\webview" goto lazer
 echo Installation des dependances, 1 a 2 minutes...
 ".venv\Scripts\python.exe" -m pip install --disable-pip-version-check -q -r requirements.txt
 if errorlevel 1 goto deps_failed
@@ -64,9 +65,8 @@ exit /b 0
 rem Bilan partage avec le developpeur : seulement si le joueur a accepte (question posee une seule fois).
 chcp 65001 >nul
 ".venv\Scripts\python.exe" tools\diagnostic.py --auto
-rem Ferme les anciens serveurs du tableau de bord : on repart toujours sur la derniere version du code.
-powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -in 'streamlit.exe','python.exe' -and $_.CommandLine -like '*%~dp0.venv*streamlit*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"
-".venv\Scripts\streamlit.exe" run app.py --server.port 8501
+rem Le tableau de bord s'ouvre dans sa propre fenetre ; cette console se ferme aussitot.
+start "" ".venv\Scripts\pythonw.exe" tools\fenetre.pyw --deja-a-jour
 exit /b
 
 :find_python

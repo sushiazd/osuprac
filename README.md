@@ -6,7 +6,7 @@ Un outil perso qui mesure ton niveau dans chaque compétence d'osu! (lazer), rep
 
 1. Installe [Python 3.12](https://www.python.org/downloads/) en cochant **Add python.exe to PATH**, puis décompresse le dossier dans un endroit au chemin court (Documents, Bureau ou `C:\osu-progression`). Windows limite la longueur des chemins de fichiers, et certaines dépendances sont rangées très profond.
 2. Crée ta clé API : [osu.ppy.sh/home/account/edit](https://osu.ppy.sh/home/account/edit#oauth), section **OAuth**, puis **Nouvelle application OAuth**. Mets le nom que tu veux et `http://localhost` comme URL de rappel (elle ne sert pas). Chaque joueur doit créer la sienne.
-3. Double-clique sur `lancer.bat`. La première fois, il installe les dépendances (1 à 2 minutes) et ouvre le fichier `.env` : remplis `OSU_CLIENT_ID`, `OSU_CLIENT_SECRET` et `OSU_USERNAME`, enregistre, puis relance `lancer.bat`.
+3. Double-clique sur `osu progression.exe`. La première fois, il ouvre `lancer.bat`, qui installe les dépendances (1 à 2 minutes) et ouvre le fichier `.env` : remplis `OSU_CLIENT_ID`, `OSU_CLIENT_SECRET` et `OSU_USERNAME`, enregistre, puis relance `osu progression.exe`. Si Windows affiche « Windows a protégé votre ordinateur », clique sur **Informations complémentaires** puis **Exécuter quand même** : le programme n'est pas signé (son code est dans `tools/lanceur-src`).
 4. Conseillé : installe [Node.js](https://nodejs.org) (version LTS) **avant** le premier lancement. L'outil pourra alors lire tes parties locales d'osu! lazer (fails compris), analyser tes replays et cocher les maps dès la fin de chaque partie. `lancer.bat` installe le reste tout seul.
 5. Optionnel : double-clique sur `activer-synchro-auto.bat` pour une synchro toutes les heures, même tableau de bord fermé.
 
@@ -24,13 +24,15 @@ Le dossier `.venv` n'est pas fourni : il est créé par `lancer.bat` ou par la p
 
 ## Utilisation
 
-Double-clique sur `lancer.bat`, ou lance :
+Double-clique sur `osu progression.exe` (tu peux en faire un raccourci sur le Bureau). Le tableau de bord s'ouvre dans sa propre fenêtre, comme un vrai programme : ni navigateur ni terminal. Le serveur tourne caché en arrière-plan et s'arrête quand tu fermes la fenêtre ; relancer le programme alors qu'il est déjà ouvert ramène simplement la fenêtre devant. En cas de problème au démarrage, la fenêtre affiche l'erreur (journal complet dans `%LOCALAPPDATA%\osu-progression\fenetre.log`).
+
+Pour l'ouvrir dans le navigateur à la place (développement), lance :
 
 ```bash
 .\.venv\Scripts\streamlit run app.py
 ```
 
-Le tableau de bord s'ouvre dans le navigateur, avec 6 onglets :
+Le tableau de bord a 6 onglets :
 
 - **Aujourd'hui** : la map à jouer maintenant (bouton « Ouvrir dans osu! »), puis la suite de la séance. Le menu « … » d'une map permet de ne plus la proposer.
 - **Compétences** : tes 6 notes, leur évolution et ta précision au clic (d'après tes replays).
