@@ -1,22 +1,89 @@
-/* Styles des quelques composants maison (classes op-…). Couleurs et polices de base : .streamlit/config.toml.
-   Règle : une seule couleur d'accent, pas d'animation, du texte gris pour tout ce qui est secondaire.
+/* Style « papier et encre » repris d'ESIRPRAC : fond papier chaud, cartes claires à ombre douce, titres en serif,
+   un seul accent (le bleu stylo), étiquettes en petites capitales. Clair ou sombre selon Windows, comme ESIRPRAC.
+   Couleurs de base de Streamlit : .streamlit/config.toml (mêmes valeurs qu'ici : changer les deux ensemble).
    Jamais de chevron dans ce fichier : le filtre HTML de Streamlit supprimerait toute la feuille. */
 
 :root {
-  --op-accent: #ff5fa2;
-  --op-bg: #111114;
-  --op-surface: #18181d;
-  --op-surface-2: #1f1f25;
-  --op-line: #27272e;
-  --op-text: #ececf1;
-  --op-muted: #8b8b96;
-  --op-faint: #5c5c66;
-  --op-good: #45c98b;
-  --op-bad: #f2626f;
+  --op-paper: #f4f2ec;
+  --op-sheet: #fffefb;
+  --op-sheet-2: #f8f6f1;
+  --op-text: #1c1b19;
+  --op-ink-2: #55524b;
+  --op-muted: #878379;
+  --op-faint: #aaa69b;
+  --op-line: #e4e0d6;
+  --op-line-strong: #cdc8bb;
+  --op-accent: #2446c8;
+  --op-accent-ink: #ffffff;
+  --op-accent-soft: #eaeefc;
+  --op-good: #1f8a4c;
+  --op-bad: #c2352b;
+  --op-warn: #9a5b00;
+  --op-shadow: 0 1px 2px rgba(28, 27, 25, .05), 0 10px 30px -18px rgba(28, 27, 25, .25);
+  --op-serif: "Source Serif 4", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --op-paper: #121211;
+    --op-sheet: #1b1b19;
+    --op-sheet-2: #222220;
+    --op-text: #f1eee7;
+    --op-ink-2: #c3bfb5;
+    --op-muted: #8f8b82;
+    --op-faint: #5f5c56;
+    --op-line: #2e2d2a;
+    --op-line-strong: #45433e;
+    --op-accent: #7592ff;
+    --op-accent-ink: #0d1433;
+    --op-accent-soft: #1c2340;
+    --op-good: #4cc27e;
+    --op-bad: #ff6b5e;
+    --op-warn: #f0b64d;
+    --op-shadow: 0 1px 2px rgba(0, 0, 0, .35), 0 14px 34px -18px rgba(0, 0, 0, .7);
+  }
+}
+/* Une image ne suit pas le thème : visuals.py en fournit deux versions, on n'affiche que la bonne. */
+.op-only-dark { display: none !important; }
+@media (prefers-color-scheme: dark) {
+  .op-only-light { display: none !important; }
+  .op-only-dark { display: block !important; }
 }
 
+/* ---------- Habillage de Streamlit ---------- */
+h1 { letter-spacing: -0.02em; line-height: 1.08 !important; }
+h2, h3 { letter-spacing: -0.01em; }
+/* Onglets du haut : pastilles, la page ouverte en encre pleine (comme les onglets d'ESIRPRAC). */
+[data-testid="stTopNavLink"] { border-radius: 999px !important; padding-left: 14px !important; padding-right: 14px !important; }
+[data-testid="stTopNavLink"]:hover { background: var(--op-sheet-2) !important; }
+[data-testid="stTopNavLink"][aria-current="page"] { background: var(--op-text) !important; }
+[data-testid="stTopNavLink"][aria-current="page"] span { color: var(--op-paper) !important; }
+[data-testid="stHeader"] { border-bottom: 1px solid var(--op-line); }
+/* Choix segmentés : le choix actif en encre pleine. */
+[data-testid="stButtonGroup"] button[aria-checked="true"], [data-testid="stButtonGroup"] button[aria-pressed="true"] {
+  background: var(--op-text) !important; border-color: var(--op-text) !important; }
+[data-testid="stButtonGroup"] button[aria-checked="true"] *, [data-testid="stButtonGroup"] button[aria-pressed="true"] * {
+  color: var(--op-paper) !important; }
+/* Onglets (st.tabs) : un interrupteur à pastilles, comme « Révisions / Planning » sur ESIRPRAC. */
+[data-testid="stTabs"] [role="tablist"] { display: inline-flex !important; width: fit-content !important; max-width: 100%;
+  align-self: flex-start; gap: 4px; padding: 4px;
+  border-radius: 12px; background: var(--op-sheet-2); border: 1px solid var(--op-line); }
+[data-testid="stTabs"] [role="tablist"]::after, [data-testid="stTab"] .react-aria-SelectionIndicator { display: none !important; }
+[data-testid="stTab"] { height: 34px !important; padding: 0 16px !important; border-radius: 9px; }
+[data-testid="stTab"] p { font-weight: 600; color: var(--op-ink-2); }
+[data-testid="stTab"][aria-selected="true"] { background: var(--op-sheet); box-shadow: 0 1px 3px rgba(0, 0, 0, .12); }
+[data-testid="stTab"][aria-selected="true"] p { color: var(--op-text) !important; }
+/* Conteneurs à bordure, popovers, expanders : des feuilles posées sur le papier. */
+[data-testid="stVerticalBlock"][class*="BorderWrapper"],
+.stVerticalBlock.st-border,
+[data-testid="stExpander"] details,
+[data-testid="stMetric"] { background: var(--op-sheet); box-shadow: var(--op-shadow); }
+[data-testid="stBaseButton-secondary"], [data-testid="stPopoverButton"] { background: var(--op-sheet) !important; }
+[data-testid="stBaseButton-secondary"]:hover, [data-testid="stPopoverButton"]:hover { border-color: var(--op-accent) !important; }
+[data-testid="stBaseButton-primary"], [data-testid="stBaseLinkButton-primary"],
+[data-testid="stBaseButton-primary"] *, [data-testid="stBaseLinkButton-primary"] * { color: var(--op-accent-ink) !important; font-weight: 600; }
+
 .op-muted { color: var(--op-muted); }
-.op-label { font-size: 0.72rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--op-muted); }
+.op-label { font-size: 0.72rem; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; color: var(--op-muted); }
 .op-accent { color: var(--op-accent); }
 .op-good { color: var(--op-good); }
 .op-bad { color: var(--op-bad); }
@@ -29,55 +96,63 @@
 }
 
 /* ---------- Avatar (photo ou initiale) ---------- */
-.op-avatar { width: 40px; height: 40px; border-radius: 10px; object-fit: cover; flex: none; background: var(--op-surface-2); }
-.op-monogram { display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 1.05rem;
-  color: var(--op-text); border: 1px solid var(--op-line); }
+.op-avatar { width: 40px; height: 40px; border-radius: 10px; object-fit: cover; flex: none; background: var(--op-sheet-2); }
+.op-monogram { display: flex; align-items: center; justify-content: center; font: 600 1.15rem/1 var(--op-serif);
+  background: var(--op-text); color: var(--op-paper); }
 .op-user { display: flex; align-items: center; gap: 12px; }
 .op-user-name { font-weight: 600; line-height: 1.2; }
 .op-user-sub { font-size: 0.8rem; color: var(--op-muted); }
 
-/* ---------- Barre de progression fine ---------- */
-.op-progress { height: 4px; border-radius: 4px; background: var(--op-line); overflow: hidden; }
-.op-progress > div { height: 100%; border-radius: 4px; background: var(--op-accent); }
+/* ---------- Barre de progression ---------- */
+.op-progress { height: 8px; border-radius: 999px; background: var(--op-sheet-2); border: 1px solid var(--op-line); overflow: hidden; }
+.op-progress > div { height: 100%; border-radius: 999px; background: var(--op-accent); }
 
 /* ---------- Résumé en haut de page ---------- */
-.op-summary { display: flex; flex-wrap: wrap; gap: 6px 28px; align-items: baseline; color: var(--op-muted); font-size: 0.92rem; }
-.op-summary b { color: var(--op-text); font-weight: 600; font-size: 1.05rem; margin-right: 4px; }
+.op-summary { display: flex; flex-wrap: wrap; gap: 6px 28px; align-items: baseline; color: var(--op-ink-2); font-size: 0.92rem; }
+.op-summary b { color: var(--op-text); font-weight: 800; font-size: 1.35rem; letter-spacing: -0.02em; margin-right: 5px;
+  font-variant-numeric: tabular-nums; }
 
 /* ---------- Map à jouer maintenant ---------- */
-.op-now { border: 1px solid var(--op-line); border-radius: 14px; overflow: hidden; background: var(--op-surface); }
-.op-now-cover { height: 150px; background-color: var(--op-surface-2); background-size: cover; background-position: center; }
-.op-now-body { padding: 18px 20px 4px; }
-.op-now-title { font-size: 1.35rem; font-weight: 600; line-height: 1.25; margin: 6px 0 2px; }
-.op-now-sub { color: var(--op-muted); font-size: 0.9rem; }
+.op-now { border: 1px solid var(--op-line); border-radius: 18px; overflow: hidden; background: var(--op-sheet);
+  box-shadow: var(--op-shadow); }
+.op-now-cover { height: 150px; background-color: var(--op-sheet-2); background-size: cover; background-position: center; }
+.op-now-body { padding: 20px 24px 6px; }
+.op-now-body > .op-label { color: var(--op-accent); }
+.op-now-title { font: 600 1.6rem/1.2 var(--op-serif); letter-spacing: -0.01em; margin: 8px 0 3px; }
+.op-now-sub { color: var(--op-ink-2); font-size: 0.9rem; }
 .op-meta { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 12px; font-size: 0.86rem; color: var(--op-muted); }
 .op-meta span { display: inline-flex; align-items: center; gap: 5px; }
 .op-meta b { color: var(--op-text); font-weight: 600; }
-.op-goal { margin-top: 14px; padding: 10px 12px; border-radius: 10px; background: var(--op-surface-2); font-size: 0.88rem; }
-.op-goal .op-label { display: block; margin-bottom: 2px; }
+.op-goal { margin-top: 14px; padding: 12px 16px; border-radius: 12px; background: var(--op-accent-soft);
+  border: 1px solid color-mix(in srgb, var(--op-accent) 30%, transparent); font-size: 0.92rem; }
+.op-goal .op-label { display: block; margin-bottom: 4px; color: var(--op-accent); }
 
 /* ---------- Ligne de map (liste) ---------- */
 .op-row { display: flex; align-items: center; gap: 14px; min-width: 0; }
 /* Un titre long se coupe au lieu de renvoyer les boutons de la map à la ligne. */
 .stHorizontalBlock[class*="st-key-pick-"] { flex-wrap: nowrap; }
 .stHorizontalBlock[class*="st-key-pick-"] > .stElementContainer:first-child { flex: 1 1 0; min-width: 0; }
-.op-num { width: 18px; flex: none; text-align: right; color: var(--op-faint); font-variant-numeric: tabular-nums; font-size: 0.85rem; }
-.op-thumb { width: 54px; height: 40px; border-radius: 8px; flex: none; object-fit: cover; background: var(--op-surface-2); }
+.op-num { width: 22px; height: 22px; flex: none; display: grid; place-items: center; border-radius: 50%;
+  background: var(--op-sheet-2); border: 1px solid var(--op-line); color: var(--op-muted);
+  font-variant-numeric: tabular-nums; font-size: 0.72rem; font-weight: 700; }
+.op-thumb { width: 54px; height: 40px; border-radius: 8px; flex: none; object-fit: cover; background: var(--op-sheet-2); }
 .op-row-text { flex: 1; min-width: 0; }
-.op-row-title { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.op-row-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .op-row-sub { font-size: 0.82rem; color: var(--op-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .op-row-side { flex: none; display: flex; align-items: center; gap: 14px; font-size: 0.85rem; color: var(--op-muted);
   font-variant-numeric: tabular-nums; }
 .op-done .op-row-title { color: var(--op-muted); text-decoration: line-through; text-decoration-color: var(--op-faint); }
+.op-done .op-num { background: color-mix(in srgb, var(--op-good) 14%, transparent); color: var(--op-good); border-color: transparent; }
 .op-check { color: var(--op-good); }
-.op-retry { color: #e8a33d; }
+.op-retry { color: var(--op-warn); }
 
 /* ---------- Hexagone des compétences ---------- */
 .op-radar-box { position: relative; width: 100%; max-width: 380px; aspect-ratio: 1; margin: 0 auto; }
 .op-radar-img { width: 100%; height: 100%; display: block; }
 .op-radar-label { position: absolute; transform: translate(-50%, -50%); text-align: center; line-height: 1.2; white-space: nowrap; }
-.op-radar-label b { display: block; font-weight: 500; font-size: 0.82rem; color: var(--op-muted); }
-.op-radar-label span { font-weight: 600; font-size: 0.95rem; }
+.op-radar-label b { display: block; font-weight: 600; font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--op-muted); }
+.op-radar-label span { font: 600 1.05rem/1.3 var(--op-serif); }
 
 /* ---------- Liste des compétences ---------- */
 .op-skills { display: flex; flex-direction: column; }
@@ -85,32 +160,35 @@
   border-bottom: 1px solid var(--op-line); }
 .op-skill:last-child { border-bottom: none; }
 .op-skill-name { font-weight: 500; }
-.op-skill-tag { margin-left: 8px; font-size: 0.72rem; color: var(--op-muted); border: 1px solid var(--op-line);
-  border-radius: 6px; padding: 1px 6px; vertical-align: 1px; }
-.op-skill-tag.op-tag-accent { color: var(--op-accent); border-color: rgba(255, 95, 162, 0.35); }
-.op-skill-value { font-weight: 600; font-size: 1.05rem; font-variant-numeric: tabular-nums; }
+.op-skill-tag { margin-left: 8px; font-size: 0.72rem; font-weight: 600; color: var(--op-ink-2); background: var(--op-sheet-2);
+  border: 1px solid var(--op-line); border-radius: 999px; padding: 1px 9px; vertical-align: 1px; }
+.op-skill-tag.op-tag-accent { color: var(--op-accent); background: var(--op-accent-soft); border-color: transparent; }
+.op-skill-value { font: 600 1.15rem/1 var(--op-serif); font-variant-numeric: tabular-nums; }
 .op-skill-delta { width: 64px; text-align: right; font-size: 0.82rem; font-variant-numeric: tabular-nums; color: var(--op-faint); }
 
 /* ---------- Paliers ---------- */
 .op-tracks { display: flex; flex-direction: column; }
-.op-track { display: grid; grid-template-columns: 110px 1fr 60px; align-items: center; gap: 16px; padding: 12px 2px;
+.op-track { display: grid; grid-template-columns: 110px 1fr 76px; align-items: center; gap: 16px; padding: 12px 2px;
   border-bottom: 1px solid var(--op-line); }
 .op-track:last-child { border-bottom: none; }
 .op-track-name { font-weight: 500; }
 .op-track-steps { display: flex; gap: 6px; }
 .op-step { flex: 1; height: 6px; border-radius: 3px; background: var(--op-line); }
-.op-step-done { background: #6b6b75; }
+.op-step-done { background: var(--op-good); }
 .op-step-current { background: var(--op-accent); }
-.op-track-level { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
-.op-track-level small { display: block; font-weight: 400; font-size: 0.75rem; color: var(--op-muted); }
+.op-track-level { text-align: right; font: 600 1.05rem/1.2 var(--op-serif); font-variant-numeric: tabular-nums; }
+.op-track-level small { display: block; font-family: Inter, sans-serif; font-weight: 400; font-size: 0.75rem; line-height: 1.3;
+  white-space: nowrap; color: var(--op-muted); }
 
 /* ---------- Succès ---------- */
-.op-badges { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
-.op-badge { padding: 14px; border-radius: 12px; border: 1px solid var(--op-line); background: var(--op-surface); }
-.op-badge .op-icon { font-size: 1.4rem; color: var(--op-accent); }
-.op-badge-title { font-weight: 600; font-size: 0.9rem; margin-top: 8px; }
-.op-badge-text { font-size: 0.78rem; color: var(--op-muted); margin-top: 2px; line-height: 1.3; }
-.op-badge-off { background: transparent; }
-.op-badge-off .op-icon { color: var(--op-faint); }
+.op-badges { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.op-badge { padding: 16px; border-radius: 14px; border: 1px solid var(--op-line); background: var(--op-sheet);
+  box-shadow: var(--op-shadow); }
+.op-badge .op-icon { font-size: 1.3rem; width: 38px; height: 38px; display: grid; place-items: center; border-radius: 10px;
+  background: var(--op-accent-soft); color: var(--op-accent); }
+.op-badge-title { font: 600 1rem/1.25 var(--op-serif); margin-top: 10px; }
+.op-badge-text { font-size: 0.78rem; color: var(--op-muted); margin-top: 3px; line-height: 1.35; }
+.op-badge-off { background: transparent; box-shadow: none; border-style: dashed; }
+.op-badge-off .op-icon { background: var(--op-sheet-2); color: var(--op-faint); }
 .op-badge-off .op-badge-title { color: var(--op-muted); }
 .op-badge .op-progress { margin-top: 10px; }

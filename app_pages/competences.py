@@ -74,8 +74,8 @@ else:
                      & (history["date"] >= history["date"].max() - pd.Timedelta(days=90))]
     daily = (recent.assign(jour=recent["date"].dt.tz_convert(None).dt.normalize())
              .groupby("jour", as_index=False)["note"].last())
-    chart = alt.Chart(daily).mark_line(interpolate="monotone", strokeWidth=2.5, color=visuals.ACCENT,
-                                       point=alt.OverlayMarkDef(size=28, color=visuals.ACCENT)).encode(
+    chart = alt.Chart(daily).mark_line(interpolate="monotone", strokeWidth=2.5,
+                                       point=alt.OverlayMarkDef(size=28)).encode(
         x=alt.X("jour:T", title=None, axis=alt.Axis(format="%d/%m")),
         y=alt.Y("note:Q", title=None, scale=alt.Scale(zero=False)),
         tooltip=[alt.Tooltip("jour:T", title="Jour", format="%d/%m"),

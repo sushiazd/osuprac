@@ -9,7 +9,9 @@ import math
 
 from .fmt import stars as stars_text
 
-ACCENT = "#ff5fa2"
+# Bleu « stylo » d'ESIRPRAC, en version claire et sombre (mêmes valeurs que theme.css et config.toml).
+ACCENT = {"light": "#2446c8", "dark": "#7592ff"}
+GRID = {"light": "#cdc8bb", "dark": "#45433e"}
 DEFAULT_AVATAR_MARKERS = ("avatar-guest",)  # image par défaut d'osu! quand le joueur n'a pas mis de photo
 
 
@@ -162,22 +164,27 @@ def radar(skills: list[str], labels: dict, ratings: dict, size: int = 380) -> st
     def poly(vals) -> str:
         return " ".join(f"{x:.1f},{y:.1f}" for x, y in (point(i, v) for i, v in enumerate(vals)))
 
-    parts = [f'<polygon points="{poly([lo + 0.5 * k] * n)}" fill="none" stroke="#2a2a31" stroke-width="1"/>'
-             for k in range(1, round((hi - lo) / 0.5) + 1)]
-    parts += [f'<line x1="{cx}" y1="{cy}" x2="{point(i, hi)[0]:.1f}" y2="{point(i, hi)[1]:.1f}" stroke="#2a2a31"/>'
-              for i in range(n)]
-    parts.append(f'<polygon points="{poly(values)}" fill="{ACCENT}" fill-opacity=".14" stroke="{ACCENT}" '
-                 'stroke-width="2" stroke-linejoin="round"/>')
-    parts += [f'<circle cx="{point(i, v)[0]:.1f}" cy="{point(i, v)[1]:.1f}" r="3.5" fill="{ACCENT}"/>'
-              for i, v in enumerate(values)]
-    svg = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}">{"".join(parts)}</svg>'
+    def svg(mode: str) -> str:
+        accent, grid = ACCENT[mode], GRID[mode]
+        parts = [f'<polygon points="{poly([lo + 0.5 * k] * n)}" fill="none" stroke="{grid}" stroke-width="1"/>'
+                 for k in range(1, round((hi - lo) / 0.5) + 1)]
+        parts += [f'<line x1="{cx}" y1="{cy}" x2="{point(i, hi)[0]:.1f}" y2="{point(i, hi)[1]:.1f}" stroke="{grid}"/>'
+                  for i in range(n)]
+        parts.append(f'<polygon points="{poly(values)}" fill="{accent}" fill-opacity=".12" stroke="{accent}" '
+                     'stroke-width="2" stroke-linejoin="round"/>')
+        parts += [f'<circle cx="{point(i, v)[0]:.1f}" cy="{point(i, v)[1]:.1f}" r="3.5" fill="{accent}"/>'
+                  for i, v in enumerate(values)]
+        return f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}">{"".join(parts)}</svg>'
+
     labels_html = []
     for i, s in enumerate(skills):
         lx, ly = cx + (R + 36) * math.cos(angle(i)), cy + (R + 30) * math.sin(angle(i))
         labels_html.append(f'<div class="op-radar-label" style="left:{lx / size * 100:.2f}%;top:{ly / size * 100:.2f}%">'
                            f'<b>{esc(labels[s])}</b><span>{esc(stars_text(ratings[s]))}</span></div>')
-    return (f'<div class="op-radar-box">{svg_image(svg, "op-radar-img", "Hexagone de tes compétences")}'
-            f'{"".join(labels_html)}</div>')
+    # Une image ne suit pas le thème : une version claire et une sombre, theme.css n'affiche que la bonne.
+    images = "".join(svg_image(svg(mode), f"op-radar-img op-only-{mode}", "Hexagone de tes compétences")
+                     for mode in ("light", "dark"))
+    return f'<div class="op-radar-box">{images}{"".join(labels_html)}</div>'
 
 
 def skill_list(rows: list[dict]) -> str:

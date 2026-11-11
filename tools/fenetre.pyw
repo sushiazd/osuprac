@@ -32,16 +32,20 @@ kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 
 LOADING = """<!doctype html><html><head><meta charset="utf-8"><style>
-html,body{margin:0;height:100%;background:#111114;color:#ececf1;font-family:"Segoe UI",Inter,sans-serif}
-body{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;user-select:none}
-.ring{width:64px;height:64px;border-radius:50%;border:5px solid #27272e;border-top-color:#ff5fa2;
+:root{--paper:#f4f2ec;--sheet:#fffefb;--ink:#1c1b19;--ink-2:#55524b;--muted:#878379;--rule:#e4e0d6;--pen:#2446c8;
+--bad:#c2352b}
+@media (prefers-color-scheme:dark){:root{--paper:#121211;--sheet:#1b1b19;--ink:#f1eee7;--ink-2:#c3bfb5;--muted:#8f8b82;
+--rule:#2e2d2a;--pen:#7592ff;--bad:#ff6b5e}}
+html,body{margin:0;height:100%;background:var(--paper);color:var(--ink);font-family:Inter,"Segoe UI",sans-serif}
+body{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;user-select:none}
+.ring{width:56px;height:56px;border-radius:50%;border:4px solid var(--rule);border-top-color:var(--pen);
 animation:spin .9s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
-h1{margin:0;font-size:22px;font-weight:600}
-#status{color:#8b8b96;font-size:14px}
-pre{max-width:90vw;max-height:45vh;overflow:auto;background:#1a1a1f;border:1px solid #27272e;border-radius:10px;
-padding:12px;font-size:12px;color:#c9c9d1;white-space:pre-wrap;display:none}
-.error .ring{border-color:#f2626f;animation:none}
+h1{margin:0;font:600 30px/1.1 "Source Serif 4","Iowan Old Style","Palatino Linotype",Georgia,serif;letter-spacing:-.02em}
+#status{color:var(--muted);font-size:14px}
+pre{max-width:90vw;max-height:45vh;overflow:auto;background:var(--sheet);border:1px solid var(--rule);border-radius:12px;
+padding:12px 14px;font-size:12px;color:var(--ink-2);white-space:pre-wrap;display:none}
+.error .ring{border-color:var(--bad);animation:none}
 </style></head><body>
 <div class="ring"></div><h1>osu! progression</h1><div id="status">Ouverture…</div><pre id="log"></pre>
 <script>
@@ -182,6 +186,17 @@ def boot(window) -> None:
                                f"{json.dumps(log_tail() + chr(10) + chr(10) + f'Journal complet : {LOG}')})")
 
 
+def windows_dark() -> bool:
+    """Le mode sombre des applications Windows (Paramètres > Personnalisation > Couleurs)."""
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize") as key:
+            return winreg.QueryValueEx(key, "AppsUseLightTheme")[0] == 0
+    except OSError:
+        return True
+
+
 def main() -> None:
     HOME.mkdir(parents=True, exist_ok=True)
     if focus_existing_window():
@@ -190,8 +205,9 @@ def main() -> None:
     ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("osuprac.osu-progression")
     import webview
 
+    # Fond de la fenêtre avant le premier affichage : le papier d'ESIRPRAC, clair ou sombre comme Windows.
     window = webview.create_window(TITLE, html=LOADING, width=1440, height=920, min_size=(900, 600),
-                                   background_color="#111114", text_select=True)
+                                   background_color="#121211" if windows_dark() else "#f4f2ec", text_select=True)
     window.events.closed += Server.stop
     try:
         webview.start(boot, window, gui="edgechromium", icon=str(ICON), private_mode=False,

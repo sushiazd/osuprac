@@ -226,12 +226,12 @@ def map_card(conn, beatmap_id: int, *, role: str | None = None, cat: str, level_
 
 
 def styled_chart(chart):
-    """Graphique Altair sobre : fond transparent, grille discrète."""
+    """Graphique Altair sobre : fond transparent, sans cadre. Couleurs, grille et textes viennent du thème
+    Streamlit (clair ou sombre) : n'en fixer aucune ici."""
     return (chart.configure(background="transparent", font="Inter")
             .configure_view(strokeWidth=0)
-            .configure_axis(gridColor="#202026", domain=False, tickColor="#202026",
-                            labelColor="#8b8b96", titleColor="#8b8b96", labelFontSize=12, titleFontWeight=500)
-            .configure_legend(labelColor="#ececf1", labelFontSize=12))
+            .configure_axis(domain=False, labelFontSize=12, titleFontWeight=500)
+            .configure_legend(labelFontSize=12))
 
 
 def inject_theme() -> None:
