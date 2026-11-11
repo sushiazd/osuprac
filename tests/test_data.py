@@ -5,7 +5,7 @@ from datetime import date, timedelta
 import pytest
 from conftest import add_map, score
 
-from osuprog import db, live, planner, progression, rewards
+from osuprog import db, goals, live, planner, progression, rewards
 from osuprog.sync import WrongPlayer, _sync, store_score
 
 
@@ -39,15 +39,15 @@ def test_daily_backup_keeps_only_the_last_ones(conn, tmp_path):
     assert len(kept) == 3 and kept[-1] == f"osu-{date.today().isoformat()}.sqlite"
 
 
-def test_forecast_check_only_judges_the_first_attempt(conn):
+def test_track_record_only_judges_the_first_attempt(conn):
     add_map(conn, 7, weights={"aim": 1.0})
     day = "2026-10-03"
     conn.execute("INSERT INTO session_plan (day, pos, role, category, level_c, beatmap_id, p) "
                  "VALUES (?, 0, 'Entraînement', 'aim', 300, 7, 0.4)", (day,))
     store_score(conn, score(1, 7, "2026-10-03T18:00:00Z", accuracy=0.70), "recent")   # 1er essai : raté
     store_score(conn, score(2, 7, "2026-10-03T18:05:00Z", accuracy=0.92), "recent")   # 2e essai : réussi
-    check = planner.forecast_check(conn, "2026-10-04")
-    assert check["n"] == 1 and check["met"] == 0 and abs(check["predicted"] - 0.4) < 1e-9
+    record = goals.track_record(conn)
+    assert record["n"] == 1 and record["met"] == 0 and abs(record["shown"] - 0.4) < 1e-9
 
 
 def test_ignored_tier_map_leaves_the_tier_and_the_program(conn):

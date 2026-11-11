@@ -1,10 +1,8 @@
 """Page « Guide » : comment se servir de l'outil, et ce que veulent dire les chiffres."""
-from datetime import date
-
 import pandas as pd
 import streamlit as st
 
-from osuprog import db, fmt, planner, ppcalc, progression
+from osuprog import db, fmt, goals, model, planner, ppcalc, progression
 from osuprog.rating import load as load_ratings
 from osuprog.skills import CATEGORIES, CRITERIA, LABELS
 from osuprog.ui import SKILL_PLAIN, criterion_text, stars
@@ -17,7 +15,7 @@ finish, meet = planner.INTENSITY[planner.DEFAULT_INTENSITY]
 st.title("Guide")
 st.markdown(
     "1. Ouvre **Aujourd'hui** et joue les maps **dans l'ordre**.\n"
-    "2. Vise l'**objectif** indiqué sous chaque map (précision et miss maximum).\n"
+    "2. Vise l'**objectif** indiqué sous chaque map (le plus souvent : ta précision habituelle sur la map).\n"
     "3. C'est tout : avec le suivi en direct, les maps se cochent toutes seules à la fin de chaque partie."
 )
 
@@ -74,12 +72,16 @@ st.subheader("La séance du jour")
 with st.expander("Comment les maps sont choisies"):
     st.markdown(
         f"Deux sortes de travail. **Entraînement** : des maps que tu finis environ {fmt.share(finish)} du temps, avec "
-        f"{fmt.share(meet)} de chances d'atteindre l'objectif de précision, pour jouer propre. **Montée** (environ "
+        "pour objectif **ta précision habituelle sur la map** (calculée sur tes parties récentes : étoiles, jauge de "
+        "vie, OD, durée, et ce que tu fais d'habitude sur la map). Un objectif fixe (80 %) envoyait vers des maps "
+        "bien plus faciles que celles que tu joues. **Montée** (environ "
         f"{fmt.share(planner.CLIMB_SHARE)} de la séance) : des maps près de ta limite, que tu finis proprement "
         f"(au plus 8 % de miss) environ {fmt.share(planner.CLIMB_FINISH)} du temps, de préférence celles qui rapportent des pp. Le temps est réparti "
         "entre les compétences selon leur retard (comparées à critère égal : 80 % de précision partout), leur place "
         "dans les maps du niveau suivant et l'incertitude de leur note (aucune ne dépasse "
-        f"{fmt.share(planner.MAX_SHARE)}). Ordre : échauffement, travail ciblé, montée, défi, révision.")
+        f"{fmt.share(planner.MAX_SHARE)}). Si tu as un **projet**, une partie de la séance le prépare. Seules les "
+        "maps du programme comptent dans la durée de la séance : jouer autre chose ne vide pas ta liste. Ordre : "
+        "échauffement, travail ciblé, montée, préparation et projet (ou défi), révision.")
     summary = db.get_meta(conn, "plan_summary") or {}
     shares, parts = summary.get("shares") or {}, summary.get("parts") or {}
     if shares:
@@ -94,23 +96,36 @@ with st.expander("Les types de maps"):
     st.markdown(
         "- **Échauffement** : facile, pour te mettre en route.\n"
         "- **Objectif** : une map de ton palier en cours.\n"
-        "- **Entraînement** : du travail ciblé, pour jouer propre (objectif de précision).\n"
+        "- **Entraînement** : du travail ciblé à ton niveau. Objectif : au moins ta précision habituelle sur la "
+        "map.\n"
         "- **Montée** : près de ta limite (tu la finis proprement environ 6 fois sur 10). Environ un tiers de la "
         "séance : c'est là que ton niveau de passe et tes pp montent. Le but : la finir avec au plus 8 % de miss, "
         "précision libre. Survivre ne suffit pas : sur une map à jauge de vie très basse, on finit même en ratant "
         "tout.\n"
         "- **Test de niveau** : mesure une compétence encore mal connue.\n"
-        "- **Défi** : au-dessus de ton niveau, la rater est normal.\n"
+        "- **Défi** : au-dessus de ton niveau, la rater est normal (les jours sans projet).\n"
+        "- **Projet** : une map que tu t'acharnes à passer (au moins 5 essais sur 2 jours), repérée toute seule. "
+        "Étape 1 : la finir ; étape 2 : la finir avec au plus 8 % de miss. Tes progrès sont en bas d'**Aujourd'hui**.\n"
+        "- **Préparation** : même style que ton projet (sauts, rythme, format), un peu plus facile.\n"
         "- **Révision** : entretient une compétence peu travaillée.\n"
         "- **Examen** : pour passer au niveau suivant.")
-with st.expander("Les prévisions sont-elles justes ?"):
-    check = planner.forecast_check(conn, date.today().isoformat())
-    if check["n"] >= 5:
-        st.markdown(f"Ces 14 derniers jours, sur {check['n']} maps proposées, tu as atteint l'objectif **dès le "
-                    f"premier essai** {check['met']} fois ; l'outil en prévoyait {check['predicted']:.0f}. "
-                    "Il se recale tout seul à chaque synchronisation.")
+with st.expander("Les chances affichées sont-elles justes ?"):
+    record = goals.track_record(conn)
+    offset = db.get_meta(conn, "session_offset") or {}
+    if record["n"] >= 10:
+        gap = record["met"] - record["shown"]
+        verdict = ("C'est juste." if abs(gap) < 0.08 else
+                   "Les chances étaient trop prudentes." if gap > 0 else "Les chances étaient trop optimistes.")
+        st.markdown(
+            f"Sur tes {record['n']} derniers premiers essais de maps du programme, les chances affichées étaient en "
+            f"moyenne de **{fmt.share(record['shown'])}**, et tu as réussi **{fmt.share(record['met'])}** du temps. "
+            f"{verdict}\n\nLes maps du programme sont plus faciles que leurs étoiles ne le disent (populaires, dans "
+            "ta zone de confort) : à chaque synchronisation, l'outil apprend de tes séances de combien corriger ses "
+            "chances" + (f" (correction actuelle : {fmt.share(model.corrected(0.5, offset.get("d", 0.0)))} au lieu de 50 %)"
+                         if offset.get("d") else "") + ". À niveau égal, ta précision varie d'environ ±6 points "
+            "d'une partie à l'autre : une chance reste une moyenne, pas une promesse.")
     else:
-        st.markdown("Pas encore assez de maps jouées pour juger.")
+        st.markdown("Pas encore assez de maps du programme jouées pour juger.")
 with st.expander("Une map ne me plaît pas"):
     st.markdown("Le menu **…** d'une map propose **Ne plus me proposer** (annulable dans Progression, « Maps "
                 "retirées »). **Réglages → Proposer d'autres maps** change toute la liste du jour.")

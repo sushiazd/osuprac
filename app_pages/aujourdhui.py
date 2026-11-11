@@ -6,7 +6,7 @@ import streamlit as st
 from osuprog import db, planner, rewards, visuals
 from osuprog.api import MissingCredentials, OsuApi
 from osuprog.rating import load as load_ratings
-from osuprog.ui import item_state, map_card
+from osuprog.ui import item_state, map_card, projects_section
 
 conn = db.connect()
 ratings = load_ratings(conn)
@@ -28,7 +28,7 @@ cfg = planner.settings(conn)
 
 items = []
 for row in plan:
-    state, _ = item_state(conn, row["role"], row["category"], row["beatmap_id"], day)
+    state, _ = item_state(conn, row["role"], row["category"], row["beatmap_id"], day, row["goal"], row["goal_acc"])
     items.append({**dict(row), "state": state})
 played = sum(i["state"] != "todo" for i in items)
 goals = [i for i in items if i["role"] in ("Objectif", "Examen")]
@@ -78,7 +78,8 @@ st.html(visuals.progress(played / len(items) if items else 0))
 def card(i, *, highlight=False):
     map_card(conn, i["beatmap_id"], role=i["role"], cat=i["category"], level_c=i["level_c"],
              number=items.index(i) + 1, day=day, highlight=highlight, reason=i["reason"], p=i["p"],
-             minutes=i["minutes"], ignorable=i["role"] != "Examen" and i["state"] in ("todo", "retry"), key="today")
+             minutes=i["minutes"], ignorable=i["role"] not in ("Examen", "Projet") and i["state"] in ("todo", "retry"),
+             key="today", goal=i["goal"], goal_acc=i["goal_acc"])
 
 
 todo = [i for i in items if i["state"] == "todo"]
@@ -113,3 +114,6 @@ if items:
         with st.spinner("Choix des maps…"):
             planner.build_session(conn, api_or_none(), ratings, day, log=lambda *_: None)
         st.rerun()
+
+st.space("small")
+projects_section(conn, day)

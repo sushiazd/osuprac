@@ -90,7 +90,7 @@ def now_card(info: dict, *, role: str | None, skill_label: str, goal: str, p: fl
     if minutes:
         meta.append(f"<span>≈ {minutes:.0f} min</span>")
     if p is not None and role not in ("Échauffement", "Test de niveau"):
-        meta.append(f"<span>{round(p * 100)} % de chances {dict(Défi='de la finir', Montée='de la finir proprement').get(role, 'de réussir')}</span>")
+        meta.append(f"<span>{round(p * 100)} % de chances {dict(Défi='de la finir', Montée='de la finir proprement', Projet="de réussir aujourd'hui").get(role, 'de réussir')}</span>")
     if fc_pp:
         meta.append(f"<span>≈ {fc_pp:.0f} pp en FC</span>")
     cover_html = f'<div class="op-now-cover" style="background-image:url(\'{cover}\')"></div>' if cover else ""
@@ -238,3 +238,38 @@ def badges(items: list[dict]) -> str:
                    f'<div class="op-badge-title">{esc(a["title"])}</div><div class="op-badge-text">{sub}</div>'
                    f'{foot}</div>')
     return f'<div class="op-badges">{"".join(out)}</div>'
+
+
+# --- Projets -----------------------------------------------------------------------------------------
+
+PROJECT_STAGES = {"finir": "Étape 1 : la finir", "propre": "Étape 2 : la finir proprement", "réussi": "Réussi !"}
+
+
+def project_card(info: dict, project: dict, p: float | None = None, max_days: int = 10) -> str:
+    """Un projet : la map, son étape, et une barre par jour joué (hauteur = jusqu'où tu es allé dans la map ; bleu =
+    finie, vert = finie proprement), puis le résumé de tes progrès."""
+    thumb = cover_url(info.get("set_id"), "list")
+    thumb_html = f'<img class="op-thumb" src="{thumb}" alt="">' if thumb else '<div class="op-thumb"></div>'
+    days = project["days"][-max_days:]
+    bars = "".join(
+        f'<div class="op-pbar{" op-pbar-clean" if d["clean"] else " op-pbar-pass" if d["passed"] else ""}" '
+        f'title="{esc(d["day"])} · {d["attempts"]} essai{"s" if d["attempts"] > 1 else ""} · '
+        f'{("finie" + (f" à {d["best_acc"]:.1f} %, {d["min_miss"]} miss" if d["best_acc"] is not None else "")).replace(".", ",") if d["passed"] else f"jusqu'à {round(d["reach"] * 100)} % de la map"}">'
+        f'<i style="height:{max(6, round(d["reach"] * 100))}%"></i></div>' for d in days)
+    finished = [d for d in project["days"] if d["passed"]]
+    if finished:
+        best = max(d["best_acc"] for d in finished)
+        fewest = min(d["min_miss"] for d in finished)
+        summary_ = (f"Finie {len(finished)} jour{'s' if len(finished) > 1 else ''} · record {best:.1f} % · "
+                    f"{fewest} miss au mieux").replace(".", ",")
+    else:
+        reach = max(d["reach"] for d in project["days"])
+        summary_ = f"Pas encore finie · au plus loin : {round(reach * 100)} % de la map"
+    chance = f"<span>{round(p * 100)} % de chances aujourd'hui</span>" if p is not None and project["stage"] != "réussi" else ""
+    label_cls = "op-label op-good" if project["stage"] == "réussi" else "op-label op-accent"
+    return (f'<div class="op-project"><div class="op-row">{thumb_html}<div class="op-row-text">'
+            f'<div class="op-row-title">{esc(info.get("title"))}</div>'
+            f'<div class="op-row-sub">{esc(info.get("version"))} · {star(info.get("stars"))} · {project["attempts"]} essais</div></div>'
+            f'<div class="op-row-side"><span class="{label_cls}">{esc(PROJECT_STAGES[project["stage"]])}</span></div></div>'
+            f'<div class="op-pbars">{bars}</div>'
+            f'<div class="op-meta"><span>{esc(summary_)}</span>{chance}</div></div>')

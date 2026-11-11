@@ -3,7 +3,7 @@ import json
 import time
 from datetime import date
 
-from . import db, lazer, model, planner, pp, progression, rating, rewards
+from . import db, goals, lazer, model, planner, pp, progression, rating, rewards
 from . import mods as modlib
 from .api import OsuApi
 from .config import OSU_USERNAME
@@ -227,6 +227,10 @@ def _finish(conn, api, before: dict, new: int, first_sync: bool, started: float,
     if clean:
         db.set_meta(conn, "clean_level", clean)
     model.update_calibration(conn)
+    goals.update_session_offset(conn)
+    acc = rating.fit_acc_model(conn)
+    if acc:
+        db.set_meta(conn, "acc_model", acc)
     progression.retire_stuck_tier_maps(conn, log)
     progression.update(conn, api, ratings, log)
     planner.build_session(conn, api, ratings, date.today().isoformat(), log)

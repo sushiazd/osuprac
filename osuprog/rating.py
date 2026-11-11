@@ -250,3 +250,66 @@ def shrink_to_ratings(conn, fit: dict | None) -> dict | None:
     n = fit.get("weight", fit["plays"])
     level = (n * fit["level"] + CLEAR_PRIOR_PLAYS * prior) / (n + CLEAR_PRIOR_PLAYS)
     return {**fit, "level": round(level, 2), "scale": min(fit["scale"], CLEAR_SCALE_MAX)}
+
+
+# --- Précision habituelle ------------------------------------------------------------------------------------------
+# Objectif personnel des maps d'entraînement : « au moins ta précision habituelle sur cette map ». Rejoué jour par jour
+# sur tes parties finies (2026-11-11) : erreur moyenne 5,9 pts avec les étoiles, le HP, l'OD et la durée, 5,6 pts en
+# ajoutant ce que tu fais d'habitude sur la map elle-même. À niveau égal, ta précision varie d'environ ±6 pts d'une
+# partie à l'autre : on prévoit donc une fourchette (les quantiles des écarts), pas une valeur exacte.
+ACC_HALF_LIFE_DAYS = 7      # rejoué : erreur 5,42 pts à 14 jours, 5,24 à 7, 5,09 à 4 (mais objectif moins stable)
+ACC_MAP_PRIOR = 2.0        # parties : l'écart propre à une map est resserré vers 0 tant qu'on l'a peu jouée
+ACC_MIN_PLAYS = 30
+ACC_QUANTILES = [round(0.05 * k, 2) for k in range(1, 20)]
+
+
+def acc_features(stars: float, hp: float | None, od: float | None, length_s: float | None) -> list[float]:
+    # OD borné à 5-10 : l'effet est mesuré sur tes maps (OD 7-9 surtout) ; une map à OD 1 aurait sinon « valu »
+    # +20 pts de précision attendue.
+    od_ = max(5.0, min(10.0, od if od is not None else 8.0))
+    return [1.0, stars, (hp if hp is not None else HP_REF) - HP_REF, od_ - 8.0, math.log1p((length_s or 0.0) / 60)]
+
+
+def _weighted_quantiles(values: list[float], weights: list[float], qs: list[float]) -> list[float]:
+    pairs = sorted(zip(values, weights))
+    total = sum(w for _, w in pairs)
+    out, acc, k = [], 0.0, 0
+    for q in qs:
+        while k < len(pairs) - 1 and acc + pairs[k][1] < q * total:
+            acc += pairs[k][1]
+            k += 1
+        out.append(round(float(pairs[k][0]), 2))
+    return out
+
+
+def fit_acc_model(conn, before: str | None = None) -> dict | None:
+    """Ta précision attendue sur une map que tu finis : régression pondérée (parties récentes d'abord), plus l'écart
+    propre à chaque map déjà finie, et la répartition des écarts (pour les chances d'atteindre une précision).
+    before : n'utiliser que les parties d'avant cette date (pour rejouer l'historique, tools/backtest.py)."""
+    import numpy as np
+    rows = conn.execute(
+        """SELECT s.beatmap_id, s.accuracy, s.ended_at, s.mods, a.stars, a.attrs FROM scores s
+           JOIN map_attrs a ON a.beatmap_id = s.beatmap_id AND a.mods_key = s.mods_key
+           WHERE s.passed = 1 AND s.countable = 1 AND NOT s.abandoned AND s.source IN ('recent', 'lazer_local')
+             AND s.accuracy IS NOT NULL AND s.ended_at < ?""", (before or "9999",)
+    ).fetchall()
+    rows = [r for r in rows if not ({m["acronym"] for m in json.loads(r["mods"])} & EASY_MODS)]
+    if len(rows) < ACC_MIN_PLAYS:
+        return None
+    last = max(date.fromisoformat(r["ended_at"][:10]) for r in rows)
+    X, y, w = [], [], []
+    for r in rows:
+        a = json.loads(r["attrs"])
+        X.append(acc_features(r["stars"], a.get("hp"), a.get("od"), a.get("length_s")))
+        y.append(r["accuracy"])
+        w.append(0.5 ** ((last - date.fromisoformat(r["ended_at"][:10])).days / ACC_HALF_LIFE_DAYS))
+    X, y, w = np.array(X), np.array(y), np.array(w)
+    ridge = np.diag([0.0] + [1.0] * (X.shape[1] - 1))
+    coef = np.linalg.solve((X * w[:, None]).T @ X + ridge, (X * w[:, None]).T @ y)
+    resid = y - X @ coef
+    by_map: dict[int, list[float]] = defaultdict(list)
+    for r, e in zip(rows, resid):
+        by_map[r["beatmap_id"]].append(float(e))
+    effects = {str(b): round(sum(es) / (len(es) + ACC_MAP_PRIOR), 2) for b, es in by_map.items()}
+    return {"coef": [round(float(c), 4) for c in coef], "quantiles": _weighted_quantiles(list(resid), list(w), ACC_QUANTILES),
+            "map": effects, "plays": len(rows), "mae": round(float(np.average(np.abs(resid), weights=w)), 2)}

@@ -34,7 +34,7 @@ Pour l'ouvrir dans le navigateur à la place (développement), lance :
 
 Le tableau de bord a 6 onglets :
 
-- **Aujourd'hui** : la map à jouer maintenant (bouton « Ouvrir dans osu! »), puis la suite de la séance. Le menu « … » d'une map permet de ne plus la proposer.
+- **Aujourd'hui** : la map à jouer maintenant (bouton « Ouvrir dans osu! »), puis la suite de la séance. Le menu « … » d'une map permet de ne plus la proposer. En bas, tes **projets** : les maps que tu t'acharnes à passer, avec tes progrès jour après jour.
 - **Compétences** : tes 6 notes, leur évolution et ta précision au clic (d'après tes replays).
 - **Progression** : ton niveau, tes paliers et tes succès.
 - **pp** : tes pp par compétence (Aim, Tap, Acc, Reading) comme sur pp.huismetbenen.nl, les maps où un full combo te ferait atteindre un objectif de pp, des maps similaires à une map que tu aimes, et un calculateur (map, mods, précision, miss, combo).
@@ -81,7 +81,10 @@ La première synchronisation prend quelques secondes (un peu plus si tu as joué
 
 **5. La séance du jour.** Un planificateur (`osuprog/planner.py`) construit chaque jour une séance qui tient dans ton temps (durée de tes séances habituelles, réglable) pour te faire progresser le plus vite possible :
 
-- **Bonne difficulté :** des maps que tu finis environ 75 % du temps, avec 50 % de chances d'atteindre l'objectif de précision (réglable : intensité confort, équilibrée ou intense). Les chances sont calculées sur tes parties et recalibrées à chaque synchronisation.
+- **Bonne difficulté :** des maps que tu finis environ 75 % du temps (réglable : intensité confort, équilibrée ou intense), avec pour objectif **ta précision habituelle sur la map** (étoiles, jauge de vie, OD, durée, et ce que tu fais d'habitude sur cette map ; tenu environ 6 fois sur 10 quand tu la finis). Un objectif fixe de 80 % envoyait le programme vers des maps à 3★ finies à 90 %, bien plus faciles que celles que tu joues.
+- **Chances justes :** les maps du programme sont plus faciles que leurs étoiles ne le disent (populaires, dans ta zone de confort). À chaque synchronisation, l'outil apprend de tes premiers essais du programme de combien corriger ses chances ; le Guide montre si elles ont été justes.
+- **Projets :** une map jouée au moins 5 fois sur 2 jours différents ces 30 derniers jours devient un projet (étape 1 : la finir ; étape 2 : la finir avec au plus 8 % de miss). La séance la prépare avec des maps du même style un peu plus faciles, puis propose un essai (à la place du défi). « Ne plus suivre ce projet » dans son menu « … ».
+- **Durée :** seules les maps du programme comptent dans la durée de la séance ; jouer autre chose ne vide pas ta liste.
 - **Là où ça rapporte :** chaque compétence reçoit une part du programme selon son retard sur tes autres compétences, sa présence dans les maps que tu voudras jouer ensuite et l'incertitude de sa note. Aucune ne dépasse 40 %.
 - **Jauge de vie (HP) :** les étoiles l'ignorent. Sur tes parties, l'outil mesure combien d'étoiles « vaut » un point de HP pour finir une map (et ≈ 0,15★ pour l'objectif de précision) : il évite les maps que tu finis presque jamais et remplace une map de palier bloquante (jamais finie en 3 essais si c'est très improbable, ou 8 essais sans l'objectif).
 - **Variété et espacement :** chaque map chargée sur une compétence vaut moins pour la suivante ; les compétences très sollicitées ces 48 dernières heures sont ménagées.
@@ -90,6 +93,8 @@ La première synchronisation prend quelques secondes (un peu plus si tu as joué
 - **Compétences comparées à critère égal :** l'objectif Accuracy (85 % de précision) est plus exigeant que les autres (80 %), sa note est donc naturellement plus basse. Pour répartir le temps et repérer points forts et faibles, chaque compétence est aussi notée avec un critère commun (80 % de précision, 2 % de miss).
 
 Chaque map indique pourquoi elle est là, tes chances d'atteindre l'objectif et sa durée estimée. Après chaque synchronisation, le reste de la séance est recalculé avec tes nouvelles notes (les maps déjà jouées restent en tête).
+
+`python tools/backtest.py` rejoue ton historique jour par jour (chaque jour prédit avec les jours d'avant, sur une copie de ta base) : chances affichées face à tes premiers essais, modèles de base, précision attendue. À relancer avant de changer un modèle. Audit du 2026-11-11 : chances affichées 56 % pour 68 % de réussite (corrigé : 65 %), précision attendue à ±5,2 pts en moyenne.
 
 `python tools/simulate_training.py` compare cette méthode à d'autres (maps au hasard, trop dures, trop faciles, un seul point faible en bloc, ancienne méthode) sur un apprenant simulé, sous plusieurs hypothèses d'apprentissage. Limite : on ne connaît pas la vraie courbe d'apprentissage d'un joueur ; la simulation vérifie que la méthode reste bonne sous toutes ces hypothèses, elle ne prouve pas un gain réel.
 

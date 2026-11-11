@@ -3,25 +3,21 @@
 Fonctions pures (sans accès à la base), utilisées par le planificateur d'entraînement et par le
 choix des maps de palier.
 """
-import json
 import math
 
 from .rating import HP_REF, SCALE
 
 LOGIT_CLIP = 30.0
-# Correction apprise sur les maps du programme : sur tes 51 premiers essais vérifiables (octobre et 1er novembre), les
-# chances affichées étaient de 54 % pour 69 % de réussite, alors que le recalage est juste sur l'ensemble de tes
-# parties. On décale donc les chances de ce que montrent tes séances, prudemment (a priori resserré vers 0).
-PLAN_ROLES = ("Échauffement", "Entraînement", "Objectif", "Révision", "Test de niveau")  # chances = objectif atteint
-PLAN_OFFSET_RECENT = 80     # derniers premiers essais pris en compte : la correction suit ta progression
-PLAN_OFFSET_PRIOR_SD = 0.5  # en logit : avec ~50 essais, l'écart mesuré est retenu aux trois quarts environ
-PLAN_OFFSET_MAX = 1.0
-# Même idée pour FINIR une map : sur les maps du programme jamais jouées avant (7 nov : 23 finies sur 25, alors que
-# ~75 % étaient prévus), ton niveau de passe retarde sur ta progression. On le relève de ce que montrent ces essais,
-# prudemment : au plus 0,5★, a priori resserré vers 0.
-FINISH_SHIFT_RECENT = 60
-FINISH_SHIFT_PRIOR_SD = 0.3   # en étoiles
-FINISH_SHIFT_RANGE = (-0.2, 0.5)
+# Correction des séances : les maps que choisit le programme (populaires, dans ta zone de confort, que tu finis
+# souvent) sont plus faciles que leurs étoiles ne le disent. Mesuré le 2026-11-11 sur 103 premiers essais : 56 % de
+# chances affichées pour 68 % de réussite, toutes maps du programme confondues. UNE correction (en logit), apprise sur
+# tes derniers premiers essais du programme, s'applique donc à toutes les chances de séance. Rejouée jour par jour,
+# elle ramène la moyenne affichée de 56 % à 65 % et l'erreur (Brier) de 0,219 à 0,209. Elle remplace les deux
+# couches d'avant (décalage des objectifs, relèvement du niveau de passe), qui ne voyaient chacune qu'une partie
+# des maps.
+SESSION_OFFSET_RECENT = 80     # derniers premiers essais du programme pris en compte : la correction suit ta progression
+SESSION_OFFSET_PRIOR_SD = 0.5  # en logit : a priori resserré vers 0 (meilleur réglage rejoué : 0,5)
+SESSION_OFFSET_MAX = 1.0
 CALIBRATED_GAMES = 3      # en dessous, la note d'une compétence est encore trop incertaine
 DEFAULT_CLEAR_SCALE = 0.55
 
@@ -160,7 +156,7 @@ def fit_calibration(samples: list[tuple[float, float, float]], prior: float = 6.
     return max(-1.0, min(1.5, a)), max(0.6, min(1.6, b))
 
 
-def fit_offset(samples: list[tuple[float, float, float]], prior_sd: float = PLAN_OFFSET_PRIOR_SD) -> float:
+def fit_offset(samples: list[tuple[float, float, float]], prior_sd: float = SESSION_OFFSET_PRIOR_SD) -> float:
     """Décalage d (en logit) qui ajuste au mieux P = sigmoïde(z + d) à des (z, résultat, poids), resserré vers 0."""
     d = 0.0
     for _ in range(50):
@@ -173,85 +169,25 @@ def fit_offset(samples: list[tuple[float, float, float]], prior_sd: float = PLAN
         d += step
         if abs(step) < 1e-6:
             break
-    return max(-PLAN_OFFSET_MAX, min(PLAN_OFFSET_MAX, d))
+    return max(-SESSION_OFFSET_MAX, min(SESSION_OFFSET_MAX, d))
 
 
 def load_calibration(conn) -> tuple[float, float]:
-    """(a, b) des chances affichées et utilisées pour choisir les maps, correction des séances comprise."""
+    """(a, b) du recalage des notes Elo, appris sur toutes tes parties (sans la correction des séances)."""
     from . import db  # import tardif : db importe rating
     cal = db.get_meta(conn, "calibration")
-    return (cal["a"] + cal.get("plan_offset", 0.0), cal["b"]) if cal else (0.0, 1.0)
+    return (cal["a"], cal["b"]) if cal else (0.0, 1.0)
 
 
-def planned_first_attempts(conn, recent: int = PLAN_OFFSET_RECENT) -> list[int]:
-    """Parties qui sont le premier essai du jour d'une map du programme (rôles dont les chances visent l'objectif),
-    des plus récentes aux plus anciennes."""
+def load_offset(conn) -> float:
+    """Correction des séances (logit) à appliquer aux chances des maps du programme (voir goals.update_session_offset)."""
     from . import db
-    plans = conn.execute(
-        f"SELECT DISTINCT day, beatmap_id FROM session_plan WHERE role IN ({','.join('?' * len(PLAN_ROLES))})",
-        PLAN_ROLES).fetchall()
-    if not plans:
-        return []
-    wanted = {(r["day"], r["beatmap_id"]) for r in plans}
-    first = {}
-    for r in conn.execute(
-        f"""SELECT score_id, beatmap_id, ended_at FROM scores
-            WHERE countable = 1 AND NOT abandoned AND source != 'inferred_fail'
-              AND beatmap_id IN ({','.join('?' * len({b for _, b in wanted}))}) ORDER BY ended_at""",
-            sorted({b for _, b in wanted})):
-        key = (db.local_day(r["ended_at"]), r["beatmap_id"])
-        if key in wanted and key not in first:
-            first[key] = (r["ended_at"], r["score_id"])
-    return [sid for _, sid in sorted(first.values(), reverse=True)][:recent]
+    return float((db.get_meta(conn, "session_offset") or {}).get("d", 0.0))
 
 
-def finish_shift(conn) -> float:
-    """Étoiles à ajouter à ton niveau de passe pour coller à ce que montrent tes séances (0 si pas assez d'essais).
-
-    On ne regarde que les maps du programme dont le premier essai de toute ta vie a eu lieu ce jour-là : une map déjà
-    connue se finit plus facilement et fausserait la mesure sur les maps nouvelles.
-    """
-    from . import db
-    clear = db.get_meta(conn, "clear_level")
-    if not clear:
-        return 0.0
-    wanted = {(r["day"], r["beatmap_id"]) for r in conn.execute(
-        "SELECT DISTINCT day, beatmap_id FROM session_plan WHERE role != 'Examen'")}
-    if not wanted:
-        return 0.0
-    ids = sorted({b for _, b in wanted})
-    marks = ",".join("?" * len(ids))
-    first = {}
-    for r in conn.execute(
-        f"""SELECT beatmap_id, passed, ended_at FROM scores
-            WHERE countable = 1 AND NOT abandoned AND source != 'inferred_fail' AND mods_key = ''
-              AND beatmap_id IN ({marks}) ORDER BY ended_at""", ids):
-        first.setdefault(r["beatmap_id"], r)  # tout premier essai de la map
-    fresh = sorted(((r["ended_at"], b, r["passed"]) for b, r in first.items()
-                    if (db.local_day(r["ended_at"]), b) in wanted), reverse=True)[:FINISH_SHIFT_RECENT]
-    if not fresh:
-        return 0.0
-    attrs = {r["beatmap_id"]: r for r in conn.execute(
-        f"SELECT beatmap_id, stars, attrs FROM map_attrs WHERE mods_key = '' AND beatmap_id IN "
-        f"({','.join('?' * len(fresh))})", [b for _, b, _ in fresh])}
-    scale = clear.get("scale", DEFAULT_CLEAR_SCALE)
-    samples = []
-    for _, b, passed in fresh:
-        m = attrs.get(b)
-        if m is None:
-            continue
-        hp = json.loads(m["attrs"]).get("hp", HP_REF)
-        samples.append((logit(finish_prob(m["stars"], hp, clear["level"], scale, clear.get("hp_k", 0.0))),
-                        1.0 if passed else 0.0, 1.0))
-    if not samples:
-        return 0.0
-    d = fit_offset(samples, FINISH_SHIFT_PRIOR_SD / scale) * scale
-    return round(max(FINISH_SHIFT_RANGE[0], min(FINISH_SHIFT_RANGE[1], d)), 3)
-
-
-def shifted(clear: dict | None, shift: float) -> dict | None:
-    """Niveau de passe (ou propre) relevé de `shift` étoiles ; inchangé s'il n'existe pas."""
-    return {**clear, "level": clear["level"] + shift} if clear and shift else clear
+def corrected(p: float | None, offset: float) -> float | None:
+    """Chance brute du modèle -> chance affichée et utilisée par le programme."""
+    return None if p is None else (p if not offset else sigmoid(logit(p) + offset))
 
 
 def update_calibration(conn, recent: int = 300) -> dict:
@@ -269,13 +205,60 @@ def update_calibration(conn, recent: int = 300) -> dict:
         # Résultat binaire : « objectif atteint » (outcome = 1) ou non. C'est ce que le planificateur prédit.
         a, b = fit_calibration([(logit(r["p"]), 1.0 if r["o"] >= 0.999 else 0.0, r["w"]) for r in rows])
         cal = {"a": round(a, 3), "b": round(b, 3), "n": len(rows)}
-    planned = planned_first_attempts(conn)
-    if planned:
-        events = conn.execute(
-            f"SELECT expected AS p, outcome AS o, weight AS w FROM rating_events WHERE score_id IN "
-            f"({','.join('?' * len(planned))})", planned).fetchall()
-        offset = fit_offset([(cal["a"] + cal["b"] * logit(r["p"]), 1.0 if r["o"] >= 0.999 else 0.0, r["w"])
-                             for r in events])
-        cal |= {"plan_offset": round(offset, 3), "plan_n": len(planned)}
     db.set_meta(conn, "calibration", cal)
     return cal
+
+
+# --- Objectif personnel de précision (maps d'entraînement) -------------------------------------------------------
+# On vise ta précision habituelle sur la map : atteinte ~6 fois sur 10 quand tu la finis. Le programme choisit alors la
+# difficulté d'après tes chances de FINIR la map (≈ 4★ pour toi le 2026-11-11), et non plus d'après un 80 % fixe qui
+# l'envoyait vers des maps à 3★ (finies à 90 %, jouées par défaut).
+# Rejoué jour par jour sur 396 parties finies : tu progresses, donc tu fais en moyenne ~1,7 pt de plus que prévu ; au
+# quantile 0,4 l'objectif était tenu 73 % du temps, à 0,6 55 %. 0,55 vise ~60 %. Les chances affichées, elles, sont
+# recalées par la correction des séances.
+ACC_GOAL_QUANTILE = 0.55
+ACC_GOAL_RANGE = (50, 99)
+
+
+def expected_acc(m: dict | None, stars: float, hp: float | None, od: float | None, length_s: float | None,
+                 beatmap_id: int | None = None) -> float | None:
+    """Ta précision attendue (en %) sur cette map si tu la finis ; None sans modèle (pas assez de parties finies)."""
+    if not m:
+        return None
+    from .rating import acc_features
+    x = acc_features(stars, hp, od, length_s)
+    value = sum(c * v for c, v in zip(m["coef"], x))
+    if beatmap_id is not None:
+        value += m.get("map", {}).get(str(beatmap_id), 0.0)
+    return max(30.0, min(100.0, value))
+
+
+def _quantile_points(m: dict) -> list[tuple[float, float]]:
+    from .rating import ACC_QUANTILES
+    return list(zip(ACC_QUANTILES, m["quantiles"]))
+
+
+def acc_goal(m: dict | None, expected: float | None) -> int | None:
+    """Objectif de précision (entier, en %) : ta précision attendue décalée du quantile ACC_GOAL_QUANTILE des écarts."""
+    if not m or expected is None:
+        return None
+    pts = _quantile_points(m)
+    shift = next(v for q, v in pts if q >= ACC_GOAL_QUANTILE - 1e-9)
+    return int(max(ACC_GOAL_RANGE[0], min(ACC_GOAL_RANGE[1], math.floor(expected + shift))))
+
+
+def p_acc_at_least(m: dict | None, target: float, expected: float | None) -> float:
+    """Chances, si tu finis la map, d'y faire au moins `target` % (répartition de tes écarts habituels)."""
+    if not m or expected is None:
+        return 0.5
+    x = target - expected  # écart nécessaire
+    pts = _quantile_points(m)
+    if x <= pts[0][1]:
+        return 0.97
+    if x >= pts[-1][1]:
+        return 0.03
+    for (q0, v0), (q1, v1) in zip(pts, pts[1:]):
+        if v0 <= x <= v1:
+            f = q0 if v1 == v0 else q0 + (q1 - q0) * (x - v0) / (v1 - v0)
+            return max(0.03, min(0.97, 1 - f))
+    return 0.5

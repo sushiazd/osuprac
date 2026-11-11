@@ -142,6 +142,9 @@ ADDED_COLUMNS = [
     ("session_plan", "p", "REAL"),
     ("session_plan", "minutes", "REAL"),
     ("session_plan", "share", "REAL"),
+    ("session_plan", "p_raw", "REAL"),     # chance brute du modèle, avant la correction des séances
+    ("session_plan", "goal", "TEXT"),      # but d'un projet : « finir » ou « propre »
+    ("session_plan", "goal_acc", "REAL"),  # objectif personnel de précision (maps d'entraînement)
     ("ratings", "level", "REAL"),  # note au critère commun (rating.recompute) : pour comparer les compétences
     ("scores", "stats", "TEXT"),  # statistiques complètes au format API (fins de sliders...), pour le calcul des pp
     # Partie quittée volontairement (Échap, relance) : osu! l'enregistre comme un fail, mais on ne meurt pas avec

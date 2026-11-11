@@ -192,3 +192,14 @@ h2, h3 { letter-spacing: -0.01em; }
 .op-badge-off .op-icon { background: var(--op-sheet-2); color: var(--op-faint); }
 .op-badge-off .op-badge-title { color: var(--op-muted); }
 .op-badge .op-progress { margin-top: 10px; }
+
+/* ---------- Projets ---------- */
+.op-project { padding: 14px 16px; border-radius: 14px; border: 1px solid var(--op-line); background: var(--op-sheet);
+  box-shadow: var(--op-shadow); }
+.op-pbars { display: flex; align-items: flex-end; gap: 6px; height: 46px; margin-top: 12px; }
+.op-pbar { flex: 1; max-width: 34px; height: 100%; display: flex; align-items: flex-end; border-radius: 6px;
+  background: var(--op-sheet-2); border: 1px solid var(--op-line); overflow: hidden; }
+.op-pbar i { display: block; width: 100%; background: var(--op-muted); opacity: .55; }
+.op-pbar-pass i { background: var(--op-accent); opacity: 1; }
+.op-pbar-clean i { background: var(--op-good); opacity: 1; }
+.op-project .op-meta { margin-top: 10px; }
