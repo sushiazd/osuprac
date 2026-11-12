@@ -33,8 +33,8 @@ class OsuApi:
             client_id, client_secret = credentials()
         if not client_id or not client_secret:
             raise MissingCredentials(
-                "OSU_CLIENT_ID et OSU_CLIENT_SECRET manquent dans le fichier .env "
-                "(voir le README pour créer une application OAuth)."
+                "Clé API manquante : colle ton ID client et ton secret client sur la page Bienvenue "
+                "(ou dans le fichier .env, voir le README)."
             )
         self.client_id = client_id
         self.client_secret = client_secret
@@ -78,7 +78,7 @@ class OsuApi:
                     raise AuthError(
                         "osu! refuse ta clé API : l'ID client et le secret ne correspondent pas. "
                         "Dans les paramètres osu! (section OAuth), clique sur « Éditer » sur ton application, "
-                        "recopie l'ID client et le secret client dans .env, puis relance le dashboard."
+                        "recopie l'ID client et le secret client (page Bienvenue, « Changer de clé », ou fichier .env)."
                     )
                 if r.status_code != 200:
                     raise AuthError(f"Authentification osu! impossible (HTTP {r.status_code}), réessaie plus tard.")

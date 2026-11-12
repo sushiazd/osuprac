@@ -53,13 +53,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='Sil
 
 :env
 if exist ".env" goto run
+rem La cle API et le pseudo se saisissent dans le tableau de bord (page Bienvenue), qui remplit ce fichier.
 copy ".env.example" ".env" >nul
-echo.
-echo Remplis le fichier .env qui vient de s'ouvrir : ID client, secret client et pseudo osu!.
-echo Le README explique comment creer ta cle API. Enregistre, puis relance ce fichier.
-start "" notepad ".env"
-pause
-exit /b 0
 
 :run
 rem Bilan partage avec le developpeur : seulement si le joueur a accepte (question posee une seule fois).

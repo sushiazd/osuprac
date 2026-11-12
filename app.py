@@ -1,4 +1,5 @@
 """Tableau de bord osu! progression : streamlit run app.py (ou double-clic sur lancer.bat)."""
+import os
 import subprocess
 from pathlib import Path
 
@@ -6,7 +7,6 @@ import streamlit as st
 
 from osuprog import db, live, rewards, visuals
 from osuprog.api import AuthError, MissingCredentials
-from osuprog.config import OSU_USERNAME
 from osuprog.rating import load as load_ratings
 from osuprog.sync import WrongPlayer, sync
 from osuprog.ui import inject_theme, since
@@ -96,9 +96,10 @@ with st.sidebar:
             st.caption("Pas de photo de profil sur osu! : ajoute-la sur ton profil, elle apparaîtra ici.")
         username = None  # la base suit ce joueur : on le retrouve par son identifiant
     else:
-        username = st.text_input("Pseudo osu!", value=OSU_USERNAME)
-    if st.button("Synchroniser", icon=":material/sync:", width="stretch"):
-        run_sync(username)
+        username = st.text_input("Pseudo osu!", value=os.getenv("OSU_USERNAME", ""))  # .env, relu après la page Bienvenue
+    first_sync = st.session_state.pop("sync_now", None)  # la page Bienvenue vient d'enregistrer la clé
+    if st.button("Synchroniser", icon=":material/sync:", width="stretch") or first_sync:
+        run_sync(first_sync or username)
     last = db.get_meta(conn, "last_sync")
 
     if live.realm_mtime() is not None:
