@@ -90,7 +90,8 @@ def now_card(info: dict, *, role: str | None, skill_label: str, goal: str, p: fl
     if minutes:
         meta.append(f"<span>≈ {minutes:.0f} min</span>")
     if p is not None and role not in ("Échauffement", "Test de niveau"):
-        meta.append(f"<span>{round(p * 100)} % de chances {dict(Défi='de la finir', Montée='de la finir proprement', Projet="de réussir aujourd'hui").get(role, 'de réussir')}</span>")
+        goal = {"Défi": "de la finir", "Montée": "de la finir proprement", "Projet": "de réussir aujourd'hui"}
+        meta.append(f"<span>{round(p * 100)} % de chances {goal.get(role, 'de réussir')}</span>")
     if fc_pp:
         meta.append(f"<span>≈ {fc_pp:.0f} pp en FC</span>")
     cover_html = f'<div class="op-now-cover" style="background-image:url(\'{cover}\')"></div>' if cover else ""
@@ -245,6 +246,15 @@ def badges(items: list[dict]) -> str:
 PROJECT_STAGES = {"finir": "Étape 1 : la finir", "propre": "Étape 2 : la finir proprement", "réussi": "Réussi !"}
 
 
+def _day_result(d: dict) -> str:
+    """Résumé d'un jour de projet pour l'infobulle : « finie à 97,3 %, 2 miss » ou « jusqu'à 64 % de la map »."""
+    if not d["passed"]:
+        return f"jusqu'à {round(d['reach'] * 100)} % de la map"
+    if d["best_acc"] is None:
+        return "finie"
+    return f"finie à {d['best_acc']:.1f} %, {d['min_miss']} miss".replace(".", ",")
+
+
 def project_card(info: dict, project: dict, p: float | None = None, max_days: int = 10) -> str:
     """Un projet : la map, son étape, et une barre par jour joué (hauteur = jusqu'où tu es allé dans la map ; bleu =
     finie, vert = finie proprement), puis le résumé de tes progrès."""
@@ -254,7 +264,7 @@ def project_card(info: dict, project: dict, p: float | None = None, max_days: in
     bars = "".join(
         f'<div class="op-pbar{" op-pbar-clean" if d["clean"] else " op-pbar-pass" if d["passed"] else ""}" '
         f'title="{esc(d["day"])} · {d["attempts"]} essai{"s" if d["attempts"] > 1 else ""} · '
-        f'{("finie" + (f" à {d["best_acc"]:.1f} %, {d["min_miss"]} miss" if d["best_acc"] is not None else "")).replace(".", ",") if d["passed"] else f"jusqu'à {round(d["reach"] * 100)} % de la map"}">'
+        f'{_day_result(d)}">'
         f'<i style="height:{max(6, round(d["reach"] * 100))}%"></i></div>' for d in days)
     finished = [d for d in project["days"] if d["passed"]]
     if finished:

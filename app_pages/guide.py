@@ -121,7 +121,7 @@ with st.expander("Les chances affichées sont-elles justes ?"):
             f"moyenne de **{fmt.share(record['shown'])}**, et tu as réussi **{fmt.share(record['met'])}** du temps. "
             f"{verdict}\n\nLes maps du programme sont plus faciles que leurs étoiles ne le disent (populaires, dans "
             "ta zone de confort) : à chaque synchronisation, l'outil apprend de tes séances de combien corriger ses "
-            "chances" + (f" (correction actuelle : {fmt.share(model.corrected(0.5, offset.get("d", 0.0)))} au lieu de 50 %)"
+            "chances" + (f" (correction actuelle : {fmt.share(model.corrected(0.5, offset.get('d', 0.0)))} au lieu de 50 %)"
                          if offset.get("d") else "") + ". À niveau égal, ta précision varie d'environ ±6 points "
             "d'une partie à l'autre : une chance reste une moyenne, pas une promesse.")
     else:
